@@ -10,6 +10,8 @@ Software -
   Samay - 
     1] Research about Flutter
     2] Upload models about to be used in the shared drive 
+    3] Create Block Diagram 
+    4] Create Flowchart
 
 
 Hardware - 
