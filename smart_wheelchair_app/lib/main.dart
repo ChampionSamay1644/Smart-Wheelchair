@@ -56,6 +56,7 @@ class _MyHomePageState extends State<MyHomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.blueAccent,
         title: Text(
           'Home Page',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
@@ -92,25 +93,25 @@ class _MyHomePageState extends State<MyHomePage> {
                   onPressed: () {
                     // Handle button 1 tap
                   },
-                  child: Text('Button 1'),
+                  child: Text('Remote Control'),
                 ),
                 ElevatedButton(
                   onPressed: () {
                     // Handle button 2 tap
                   },
-                  child: Text('Button 2'),
+                  child: Text('Manual Control'),
                 ),
                 ElevatedButton(
                   onPressed: () {
                     // Handle button 3 tap
                   },
-                  child: Text('Button 3'),
+                  child: Text('Joystick Control'),
                 ),
                 ElevatedButton(
                   onPressed: () {
                     // Handle button 4 tap
                   },
-                  child: Text('Button 4'),
+                  child: Text('Voice Control'),
                 ),
               ],
             ),
