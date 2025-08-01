@@ -56,7 +56,11 @@ class _MyHomePageState extends State<MyHomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Home Page'),
+        title: Text(
+          'Home Page',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),
@@ -83,11 +87,31 @@ class _MyHomePageState extends State<MyHomePage> {
               padding: const EdgeInsets.all(16),
               mainAxisSpacing: 16,
               crossAxisSpacing: 16,
-              children: const [
-                ElevatedButton(onPressed: null, child: Text('Button 1')),
-                ElevatedButton(onPressed: null, child: Text('Button 2')),
-                ElevatedButton(onPressed: null, child: Text('Button 3')),
-                ElevatedButton(onPressed: null, child: Text('Button 4')),
+              children: [
+                ElevatedButton(
+                  onPressed: () {
+                    // Handle button 1 tap
+                  },
+                  child: Text('Button 1'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    // Handle button 2 tap
+                  },
+                  child: Text('Button 2'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    // Handle button 3 tap
+                  },
+                  child: Text('Button 3'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    // Handle button 4 tap
+                  },
+                  child: Text('Button 4'),
+                ),
               ],
             ),
           ),
