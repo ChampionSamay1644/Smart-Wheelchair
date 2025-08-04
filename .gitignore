@@ -1,6 +1,7 @@
 /models
 /models123
 /optimized_models
+/venv311
 voicemodelenglish.wav
 voicemodelmarathi.wav
 voicemodel2.wav
@@ -10,3 +11,6 @@ voicemix.wav
 voicemodelmarathienglish.wav
 voicemodelmix.wav
 voicemodelpunjabi1.wav
+male_voice.wav
+/tts_audio_outputs
+.vscode
