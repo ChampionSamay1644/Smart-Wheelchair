@@ -94,6 +94,7 @@ def transcribe_audio_file(audio_path):
     # To get the output translated to English, we need to set the task to "translate".
     # This tells the Whisper model to translate the audio from any detected language into English.
     result = pipe(audio_bytes, generate_kwargs={"task": "translate"})
+    # result = pipe(audio_bytes, generate_kwargs={"task": "transcribe"})
     
     print("Transcription:", result["text"])
 
@@ -106,5 +107,5 @@ if __name__ == "__main__":
     # You can now test with your non-English audio files.
     # For example:
     # transcribe_audio_file("voicemodel2.wav")
-    transcribe_audio_file("voicemodelenglish.wav")
+    transcribe_audio_file("voicemix.wav")
 
