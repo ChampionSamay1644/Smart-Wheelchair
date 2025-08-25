@@ -1,0 +1,5 @@
+# Requires Python 3.11+
+TTS
+numpy
+scipy
+torch>=2.0

@@ -16,7 +16,7 @@
 # ==============================================================================
 
 import os
-from TTS.api import TTS
+from TTS.api import TTS # type: ignore
 
 def main():
     """
@@ -28,16 +28,17 @@ def main():
     # --- 1. Initialize the TTS model ---
     # Model name for the multilingual, voice-cloning capable XTTS v2 model.
     model_name = "tts_models/multilingual/multi-dataset/xtts_v2"
+    model_cache_dir = "models"  # Download models here
     
     # Check if a CUDA-enabled GPU is available and use it.
     try:
         # Set gpu=True to use GPU, False to use CPU
-        tts = TTS(model_name, gpu=True)
+        tts = TTS(model_name, gpu=True, cache_dir=model_cache_dir)
         print("TTS model loaded successfully on GPU.")
     except Exception as e:
         print(f"GPU not available or error occurred: {e}")
         print("Falling back to CPU. This will be slower.")
-        tts = TTS(model_name, gpu=False)
+        tts = TTS(model_name, gpu=False, cache_dir=model_cache_dir)
         print("TTS model loaded successfully on CPU.")
 
 
