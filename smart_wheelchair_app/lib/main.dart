@@ -12,44 +12,34 @@ void main() {
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
-  // This widget is the root of your application.
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'SmartNav Wheelchair',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        //tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueAccent),
+        primaryColor: Colors.blue,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          secondary: Colors.orange,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            padding: const EdgeInsets.all(20),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(15),
+            ),
+          ),
+        ),
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const MyHomePage(title: 'SmartNav Control'),
+      debugShowCheckedModeBanner: false,
     );
   }
 }
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key, required this.title});
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
 
   final String title;
 
@@ -62,15 +52,19 @@ class _MyHomePageState extends State<MyHomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Colors.blueAccent,
-        title: Text(
+        backgroundColor: Theme.of(context).primaryColor,
+        title: const Text(
           'SmartNav',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 24,
+          ),
         ),
-
+        elevation: 4,
         actions: [
           IconButton(
-            icon: const Icon(Icons.settings),
+            icon: const Icon(Icons.settings, color: Colors.white),
             onPressed: () {
               // Handle settings tap
             },
@@ -82,82 +76,167 @@ class _MyHomePageState extends State<MyHomePage> {
           Expanded(
             flex: 1,
             child: Container(
-              color: Colors.black12, // Placeholder for camera preview
-              child: const Center(child: Text('Camera Preview')),
+              margin: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.black87,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.grey[300]!),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withAlpha((0.8 * 255).round()),
+                    blurRadius: 10,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
+              child: const Stack(
+                children: [
+                  Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.camera_alt, size: 48, color: Colors.white54),
+                        SizedBox(height: 8),
+                        Text(
+                          'Camera Preview',
+                          style: TextStyle(color: Colors.white54, fontSize: 16),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           Expanded(
             flex: 1,
-            child: GridView.count(
-              crossAxisCount: 2,
-              childAspectRatio: 1,
+            child: Container(
               padding: const EdgeInsets.all(16),
-              mainAxisSpacing: 16,
-              crossAxisSpacing: 16,
-
-              children: [
-                ElevatedButton(
-                  onPressed: () {
-                    // Handle button 1 tap
-                    Navigator.push(
+              child: GridView.count(
+                crossAxisCount: 2,
+                childAspectRatio: 1,
+                mainAxisSpacing: 16,
+                crossAxisSpacing: 16,
+                children: [
+                  _buildControlButton(
+                    context,
+                    'Remote Control',
+                    Icons.route,
+                    Colors.blue[700]!,
+                    () => Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (context) => RemoteControlPage(),
                       ),
-                    );
-                  },
-                  child: Text('Remote Control'),
-                ),
-
-                ElevatedButton(
-                  onPressed: () {
-                    // Handle button 2 tap
-                    Navigator.push(
+                    ),
+                  ),
+                  _buildControlButton(
+                    context,
+                    'Manual Control',
+                    Icons.gamepad,
+                    Colors.green[700]!,
+                    () => Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (context) => ManualControlPage(),
                       ),
-                    );
-                  },
-                  child: Text('Manual Control'),
-                ),
-
-                ElevatedButton(
-                  onPressed: () {
-                    // Handle button 3 tap
-                    Navigator.push(
+                    ),
+                  ),
+                  _buildControlButton(
+                    context,
+                    'Joystick Control',
+                    Icons.sports_esports,
+                    Colors.purple[700]!,
+                    () => Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (context) => JoystickControlPage(),
                       ),
-                    );
-                  },
-                  child: Text('Joystick Control'),
-                ),
-
-                ElevatedButton(
-                  onPressed: () {
-                    // Handle button 4 tap
-                    Navigator.push(
+                    ),
+                  ),
+                  _buildControlButton(
+                    context,
+                    'Voice Control',
+                    Icons.mic,
+                    Colors.orange[700]!,
+                    () => Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (context) => VoiceControlPage(),
                       ),
-                    );
-                  },
-                  child: Text('Voice Control'),
-                ),
-              ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: Colors.red,
-        onPressed: () {
-          print('EMERGENCY STOP ACTIVATED');
-        },
-        child: Icon(Icons.warning),
+      floatingActionButton: SizedBox(
+        height: 64,
+        width: 64,
+        child: FloatingActionButton(
+          backgroundColor: Colors.red,
+          onPressed: () {
+            print('EMERGENCY STOP ACTIVATED');
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('EMERGENCY STOP ACTIVATED'),
+                backgroundColor: Colors.red,
+                duration: Duration(seconds: 2),
+              ),
+            );
+          },
+          child: const Icon(Icons.warning_amber_rounded, size: 32),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildControlButton(
+    BuildContext context,
+    String label,
+    IconData icon,
+    Color color,
+    VoidCallback onPressed,
+  ) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [color, color.withAlpha((0.8 * 255).round())],
+        ),
+        borderRadius: BorderRadius.circular(15),
+        boxShadow: [
+          BoxShadow(
+            color: color.withAlpha((0.8 * 255).round()),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(15),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 40, color: Colors.white),
+              const SizedBox(height: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
