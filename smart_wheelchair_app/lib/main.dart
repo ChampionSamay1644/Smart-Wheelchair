@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:smart_wheelchair_app/joystick_control_page.dart';
 import 'package:smart_wheelchair_app/manual_control_page.dart';
 import 'package:smart_wheelchair_app/remote_control_page.dart';
+import 'package:smart_wheelchair_app/settings_page.dart';
 import 'package:smart_wheelchair_app/voice_control_page.dart';
 
 void main() {
@@ -66,7 +67,10 @@ class _MyHomePageState extends State<MyHomePage> {
           IconButton(
             icon: const Icon(Icons.settings, color: Colors.white),
             onPressed: () {
-              // Handle settings tap
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => SettingsPage()),
+              );
             },
           ),
         ],
