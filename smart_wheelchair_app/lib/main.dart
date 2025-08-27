@@ -1,4 +1,10 @@
+// ignore_for_file: avoid_print
+
 import 'package:flutter/material.dart';
+import 'package:smart_wheelchair_app/joystick_control_page.dart';
+import 'package:smart_wheelchair_app/manual_control_page.dart';
+import 'package:smart_wheelchair_app/remote_control_page.dart';
+import 'package:smart_wheelchair_app/voice_control_page.dart';
 
 void main() {
   runApp(const MyApp());
@@ -58,7 +64,7 @@ class _MyHomePageState extends State<MyHomePage> {
       appBar: AppBar(
         backgroundColor: Colors.blueAccent,
         title: Text(
-          'Home Page',
+          'SmartNav',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
 
@@ -88,28 +94,56 @@ class _MyHomePageState extends State<MyHomePage> {
               padding: const EdgeInsets.all(16),
               mainAxisSpacing: 16,
               crossAxisSpacing: 16,
+
               children: [
                 ElevatedButton(
                   onPressed: () {
                     // Handle button 1 tap
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => RemoteControlPage(),
+                      ),
+                    );
                   },
                   child: Text('Remote Control'),
                 ),
+
                 ElevatedButton(
                   onPressed: () {
                     // Handle button 2 tap
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => ManualControlPage(),
+                      ),
+                    );
                   },
                   child: Text('Manual Control'),
                 ),
+
                 ElevatedButton(
                   onPressed: () {
                     // Handle button 3 tap
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => JoystickControlPage(),
+                      ),
+                    );
                   },
                   child: Text('Joystick Control'),
                 ),
+
                 ElevatedButton(
                   onPressed: () {
                     // Handle button 4 tap
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => VoiceControlPage(),
+                      ),
+                    );
                   },
                   child: Text('Voice Control'),
                 ),
@@ -117,6 +151,13 @@ class _MyHomePageState extends State<MyHomePage> {
             ),
           ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: Colors.red,
+        onPressed: () {
+          print('EMERGENCY STOP ACTIVATED');
+        },
+        child: Icon(Icons.warning),
       ),
     );
   }
