@@ -37,12 +37,14 @@ We aim to design a **cost-effective, multifunctional smart wheelchair** that red
 
 | Feature | Description |
 |---------|-------------|
-| 🎤 **AI Voice Control** | Hands-free navigation (e.g., *“Go forward”*, *“Stop”*). Perfect for users with limited upper-body mobility. |
-| 🛑 **Collision Avoidance** | Ultrasonic sensors detect obstacles. System auto-brakes to prevent accidents. |
-| ❤️ **Health Monitoring** | Tracks **pulse & body temperature** in real-time and displays data on a screen. |
-| 📧 **Emergency SMS Alerts** | Sends vital stats + alert to caregivers if abnormal readings are detected. |
-| ☀️ **Dual Energy System** | Solar panel (doubles as sunshade) + hub dynamo trickle-charge the battery. |
-| 🕹️ **Joystick Override** | Manual control for precision or when voice is unsuitable. |
+| 🎤 **Multilingual Speech-to-Text** | Converts spoken commands from users into text in multiple languages to ensure accessibility. |
+| 🎙️ **Voice Command Recognition** | Detects and identifies voice commands to control wheelchair navigation hands-free. |
+| 🛑 **Collision Avoidance** | Uses ultrasonic sensors to detect obstacles and automatically stop or reroute to prevent accidents. |
+| ❤️ **Health Monitoring** |Continuously tracks **pulse rate and body temperature**, showing real-time health data on an onboard screen. |
+| 📧 **Emergency SMS Alerts** | Sends real-time health data and location alerts to caregivers or family during abnormal readings or emergencies. |
+| ☀️ **Dual Energy System** | Combines a solar panel (which also serves as a sunshade) with a hub dynamo to sustainably charge the battery. |
+| 🕹️ **Multimodal controls** | Offers alternative input modes—such as voice, application input, or joystick for users who cannot rely solely on voice. |
+
 
 ---
 
@@ -66,7 +68,11 @@ Our immediate milestones:
 Stay tuned for updates — this repo will soon include **detailed documentation, hardware schematics, and full source code**.  
 
 ---
+## 📽️ Demo Video
 
+
+
+---
 ## 🤝 Contribution & Community
 
 We welcome contributions, feedback, and ideas!  
