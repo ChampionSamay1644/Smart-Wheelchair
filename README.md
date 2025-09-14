@@ -41,7 +41,6 @@ We aim to design a **cost-effective, multifunctional smart wheelchair** that red
 | 🛑 **Collision Avoidance** | Ultrasonic sensors detect obstacles. System auto-brakes to prevent accidents. |
 | ❤️ **Health Monitoring** | Tracks **pulse & body temperature** in real-time and displays data on a screen. |
 | 📧 **Emergency SMS Alerts** | Sends vital stats + alert to caregivers if abnormal readings are detected. |
-| 💊 **Automated Pill Dispenser** | Servo-driven mechanism dispenses medicines at scheduled times. |
 | ☀️ **Dual Energy System** | Solar panel (doubles as sunshade) + hub dynamo trickle-charge the battery. |
 | 🕹️ **Joystick Override** | Manual control for precision or when voice is unsuitable. |
 
