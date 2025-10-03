@@ -6,7 +6,6 @@ import 'package:smart_wheelchair_app/manual_control_page.dart';
 import 'package:smart_wheelchair_app/remote_control_page.dart';
 import 'package:smart_wheelchair_app/settings_page.dart';
 import 'package:smart_wheelchair_app/voice_control_page.dart';
-import 'features/outdoor_navigation/outdoor_navigation_page.dart';
 
 void main() {
   runApp(const MyApp());
@@ -34,11 +33,8 @@ class MyApp extends StatelessWidget {
           ),
         ),
       ),
-      routes: {
-        '/': (context) => const MyHomePage(title: 'Smart Wheelchair'),
-        '/outdoor-navigation': (context) => const OutdoorNavigationPage(),
-      },
-      initialRoute: '/',
+      home: const MyHomePage(title: 'SmartNav Control'),
+      debugShowCheckedModeBanner: false,
     );
   }
 }
@@ -53,38 +49,6 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  // Helper method to build consistent feature buttons
-  Widget _buildFeatureButton(
-    BuildContext context, 
-    String title, 
-    IconData icon, 
-    VoidCallback onPressed,
-  ) {
-    return SizedBox(
-      width: 300,
-      child: ElevatedButton(
-        onPressed: onPressed,
-        style: ElevatedButton.styleFrom(
-          padding: const EdgeInsets.all(20),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(15),
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.start,
-          children: [
-            Icon(icon, size: 36, color: Theme.of(context).primaryColor),
-            const SizedBox(width: 16),
-            Text(
-              title,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -280,5 +244,4 @@ class _MyHomePageState extends State<MyHomePage> {
       ),
     );
   }
-}
 }
