@@ -6,6 +6,7 @@ import 'package:smart_wheelchair_app/manual_control_page.dart';
 import 'package:smart_wheelchair_app/remote_control_page.dart';
 import 'package:smart_wheelchair_app/settings_page.dart';
 import 'package:smart_wheelchair_app/voice_control_page.dart';
+import 'package:smart_wheelchair_app/features/outdoor_navigation/outdoor_navigation_page.dart';
 
 void main() {
   runApp(const MyApp());
@@ -80,6 +81,17 @@ class _MyHomePageState extends State<MyHomePage> {
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (context) => SettingsPage()),
+              );
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.map, color: Colors.white),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const OutdoorNavigationPage(),
+                ),
               );
             },
           ),
