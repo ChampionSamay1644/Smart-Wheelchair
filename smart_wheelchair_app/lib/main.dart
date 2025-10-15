@@ -1,21 +1,33 @@
 // ignore_for_file: avoid_print
 
 import 'package:flutter/material.dart';
-import 'package:smart_wheelchair_app/joystick_control_page.dart';
-import 'package:smart_wheelchair_app/manual_control_page.dart';
-import 'package:smart_wheelchair_app/remote_control_page.dart';
-import 'package:smart_wheelchair_app/settings_page.dart';
-import 'package:smart_wheelchair_app/voice_control_page.dart';
 import 'package:smart_wheelchair_app/features/outdoor_navigation/outdoor_navigation_page.dart';
+import 'package:provider/provider.dart';
+import 'core/providers/auth_provider.dart';
+import 'features/auth/splash_screen.dart';
+import 'features/auth/role_selection_page.dart';
+import 'features/dashboard/doctor_dashboard.dart';
+import 'features/dashboard/guardian_dashboard.dart';
+import 'features/dashboard/health_status_page.dart';
+import 'features/dashboard/movement_log_page.dart';
+import 'joystick_control_page.dart';
+import 'manual_control_page.dart';
+import 'remote_control_page.dart';
+import 'settings_page.dart';
+import 'voice_control_page.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(
+    MultiProvider(
+      providers: [ChangeNotifierProvider(create: (_) => AuthProvider())],
+      child: const MyApp(),
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -35,7 +47,23 @@ class MyApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const MyHomePage(title: 'SmartNav Control'),
+      initialRoute: '/',
+      routes: {
+        '/': (context) => const SplashScreen(),
+        '/role_selection': (context) => const RoleSelectionPage(),
+        '/patient_dashboard': (context) =>
+            const MyHomePage(title: 'Patient Dashboard'),
+        '/doctor_dashboard': (context) => const DoctorDashboard(),
+        '/guardian_dashboard': (context) => const GuardianDashboard(),
+        '/health_status': (context) => const HealthStatusPage(),
+        '/movement_log': (context) => const MovementLogPage(),
+        '/manual_control': (context) => ManualControlPage(),
+        '/joystick_control': (context) => JoystickControlPage(),
+        '/voice_control': (context) => VoiceControlPage(),
+        '/remote_control': (context) => RemoteControlPage(),
+        '/settings': (context) => SettingsPage(),
+        '/location': (context) => const OutdoorNavigationPage(),
+      },
       debugShowCheckedModeBanner: false,
     );
   }
@@ -76,26 +104,56 @@ class _MyHomePageState extends State<MyHomePage> {
         elevation: 4,
         actions: [
           IconButton(
-            icon: const Icon(Icons.settings, color: Colors.white),
+            icon: const Icon(
+              Icons.help,
+              color: Colors.white,
+            ), // Request Help icon
             onPressed: () {
-              Navigator.push(
+              ScaffoldMessenger.of(
                 context,
-                MaterialPageRoute(builder: (context) => SettingsPage()),
-              );
+              ).showSnackBar(const SnackBar(content: Text('Help requested!')));
             },
           ),
           IconButton(
             icon: const Icon(Icons.map, color: Colors.white),
             onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const OutdoorNavigationPage(),
-                ),
-              );
+              Navigator.pushNamed(context, '/location'); // Map route
             },
           ),
         ],
+      ),
+      drawer: Drawer(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            DrawerHeader(
+              decoration: BoxDecoration(color: Colors.blue),
+              child: Text(
+                'Patient Menu',
+                style: TextStyle(color: Colors.white, fontSize: 24),
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.health_and_safety),
+              title: Text('Health Status'),
+              onTap: () => Navigator.pushNamed(context, '/health_status'),
+            ),
+            ListTile(
+              leading: Icon(Icons.settings),
+              title: Text('Settings'),
+              onTap: () => Navigator.pushNamed(context, '/settings'),
+            ),
+            ListTile(
+              leading: Icon(Icons.logout),
+              title: Text('Logout'),
+              onTap: () async {
+                await context.read<AuthProvider>().logout();
+                if (!context.mounted) return;
+                Navigator.pushReplacementNamed(context, '/role_selection');
+              },
+            ),
+          ],
+        ),
       ),
       body: Column(
         children: [
