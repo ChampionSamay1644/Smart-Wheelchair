@@ -1,8 +1,42 @@
-transformers
-torch
-sounddevice
-resemblyzer
-noisereduce
-pydub
-scipy
-numpy
+# Smart Wheelchair - Complete Requirements
+# This file contains all necessary dependencies for the Smart Wheelchair system
+
+
+difflib  # Standard library for string matching
+librosa>=0.9.0
+librosa>=0.9.0  # Advanced audio processing for better voice detection
+noisereduce>=2.0.0
+noisereduce>=2.0.0  # For audio noise reduction
+numba>=0.56.0
+numpy>=1.20.0
+onnx 
+onnx>=1.12.0
+onnxruntime 
+onnxruntime>=1.12.0
+piper-tts 
+piper-tts>=0.0.4  # For TTS using Piper voices
+piper-tts>=1.2.0
+protobuf
+protobuf>=3.20.0
+psutil>=5.9.0  # For memory monitoring
+pydub>=0.25.1
+pydub>=0.25.1  # For audio format conversion (MP3 -> WAV)
+python-dotenv>=0.19.0
+resemblyzer>=0.1.0  # For voice verification (lightweight 2MB model)
+resemblyzer>=0.1.1
+sacremoses>=0.0.53  # Required for M2M100 tokenizer
+sacremoses>=0.0.53  # Required for translation
+scikit-learn>=1.0.0  # For additional audio processing features
+scipy>=1.7.0
+sentencepiece>=0.1.97
+sentencepiece>=0.1.97  # Required for translation
+sounddevice>=0.4.4  # For audio recording and playback
+sounddevice>=0.4.5
+soundfile>=0.10.0  # For audio file handling
+SpeechRecognition>=3.8.1
+torch>=1.10.0  # For voice processing
+torch>=1.13.0,<2.0.0  # Older torch version for better Pi support
+torch>=2.0.0
+torchaudio>=2.0.0
+transformers>=4.28.0
+transformers>=4.28.0,<4.30.0  # Version cap for better Pi compatibility

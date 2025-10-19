@@ -95,7 +95,7 @@ GROQ_API_KEY = None  # Will be loaded from .env
 USE_GROQ = True  # Prefer Groq over Hugging Face
 GROQ_MODEL = "openai/gpt-oss-20b"  # Default model
 GROQ_CLIENT = None  # Will be initialized when needed
-
+ 
 # Optional local LLM (Transformers) fallback
 ENABLE_LOCAL_LLM = False
 LOCAL_LLM_MODEL_ID = "HuggingFaceH4/zephyr-7b-beta"
@@ -163,8 +163,10 @@ TRANSLATION_MODEL_IDS = {
 _translation_cache = {}
 _stt_pipe = None
 
-WHISPER_SMALL_MODEL_ID = "openai/whisper-small"
-WHISPER_SMALL_WEIGHTS = OPTIMIZED_DIR / "whisper_small_weights_cpu_int8.pt"
+# Using Whisper tiny model for faster inference on CPU
+WHISPER_MODEL_ID = "openai/whisper-tiny"
+WHISPER_MODEL_DIR = OPTIMIZED_DIR / "models--openai--whisper-tiny"
+WHISPER_MODEL_FILE = WHISPER_MODEL_DIR / "model.safetensors"
 
 
 # --- NEW: HUGGING FACE LLM INTEGRATION ---
@@ -950,54 +952,67 @@ def debug_audio_info(arr, sr, label):
         # Silently ignore debug errors
         pass
 
-def load_local_stt_pipeline():
+def load_local_stt_pipeline(force_autodetect=False):
+    """
+    Load the speech recognition pipeline using Whisper tiny model.
+    
+    Args:
+        force_autodetect: If True, forces language auto-detection
+        
+    Returns:
+        Pipeline: The STT pipeline or None if loading failed
+    """
     global _stt_pipe
     if _stt_pipe is not None:
         return _stt_pipe
-    if not WHISPER_SMALL_WEIGHTS.exists():
-        print(f"Quantized weights not found: {WHISPER_SMALL_WEIGHTS}")
-        print("Run model.py first to create the quantized weights.")
-        return None
+        
     try:
-        # Load model configuration
-        config = AutoConfig.from_pretrained(WHISPER_SMALL_MODEL_ID, cache_dir=str(MODELS_DIR), local_files_only=True)
-        generation_config = GenerationConfig.from_pretrained(WHISPER_SMALL_MODEL_ID, cache_dir=str(MODELS_DIR), local_files_only=True)
+        print(f"Loading Whisper tiny model directly without quantization...")
         
-        print(f"Loading pre-quantized Whisper model...")
-        # Create the model from configuration
-        base_model = AutoModelForSpeechSeq2Seq.from_config(config)
-        base_model.generation_config = generation_config
+        # Get the actual model directory path
+        model_dir = OPTIMIZED_DIR / "models--openai--whisper-tiny"
         
-        # Apply dynamic quantization to the model structure first
-        # This converts the standard nn.Linear layers to their quantized counterparts
-        model_quantized = torch.quantization.quantize_dynamic(
-            base_model, {torch.nn.Linear}, dtype=torch.qint8
-        )
-        
-        # Now load the pre-quantized weights into the correctly structured model
-        model_quantized.load_state_dict(torch.load(WHISPER_SMALL_WEIGHTS, map_location="cpu"))
-        model_quantized.eval()
-        
-        # Load processor
-        try:
-            processor = AutoProcessor.from_pretrained(WHISPER_SMALL_MODEL_ID, cache_dir=str(MODELS_DIR), local_files_only=True)
-        except Exception:
-            print("Local processor files for Whisper Small not found. Please cache them locally first.")
+        if not model_dir.exists() or not (model_dir / "model.safetensors").exists():
+            print(f"Whisper tiny model not found at {model_dir}")
+            print("Please run setup_whisper_tiny.py first to download the model")
             return None
             
-        # Create pipeline using the quantized model
+        # Load processor and model directly using the downloaded model
+        try:
+            # First try loading with the model directory path
+            processor = AutoProcessor.from_pretrained(
+                str(model_dir),
+                local_files_only=True
+            )
+            
+            model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                str(model_dir),
+                dtype=torch.float32,  # Use dtype instead of torch_dtype
+                local_files_only=True
+            )
+            
+            model.eval()
+            print("Successfully loaded Whisper tiny model from local directory")
+        except Exception as e:
+            print(f"Failed to load model or processor locally from {model_dir}: {e}")
+            print("Please run setup_whisper_tiny.py to download all required model files")
+            return None
+            
+        # Create pipeline using the model directly (no quantization needed for tiny model)
         stt_pipe = pipeline(
             "automatic-speech-recognition",
-            model=model_quantized,  # Use the quantized model
+            model=model,
             tokenizer=processor.tokenizer,
             feature_extractor=processor.feature_extractor,
             max_new_tokens=128,
             batch_size=1,
-            return_timestamps=False,
-            dtype="float32",
-            device="cpu",
+            return_timestamps=False
+            # Removed device="cpu" as it's causing issues with accelerate
         )
+        # Store the pipeline for future use
         _stt_pipe = stt_pipe
+        
+        print("Whisper tiny model loaded successfully!")
         return stt_pipe
     except Exception as e:
         print(f"Failed to initialize STT pipeline: {e}")
@@ -1092,8 +1107,8 @@ def transcribe_audio(audio_path):
     
     try:
         # CONFIGURABLE PARAMETERS - Adjust these to control noise reduction sensitivity
-        NOISE_REDUCTION_SENSITIVITY = 0.4  # Range: 0.0 (no reduction) to 1.0 (maximum reduction)
-        VOICE_DETECTION_PERCENTILE = 60  # Range: 50-80, higher = more aggressive noise reduction
+        NOISE_REDUCTION_SENSITIVITY = 0.8 # Range: 0.0 (no reduction) to 1.0 (maximum reduction)
+        VOICE_DETECTION_PERCENTILE = 80  # Range: 50-80, higher = more aggressive noise reduction
         
         # STEP 1: Gentle high-pass filter to remove low rumble
         from scipy import signal

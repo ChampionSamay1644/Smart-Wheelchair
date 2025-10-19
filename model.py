@@ -107,5 +107,5 @@ if __name__ == "__main__":
     # You can now test with your non-English audio files.
     # For example:
     # transcribe_audio_file("voicemodel2.wav")
-    transcribe_audio_file("voicemix.wav")
+    transcribe_audio_file("shruti_processed.wav")
 

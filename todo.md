@@ -1,17 +1,13 @@
 Software - 
   Aarya -
-    1] Research about Flutter
-    2] Create a basic Flutter app in that a Control Page for the Wheelchair from where it will allow for Remote access
+    1] Yolo setup for object/staircase detection
   
   Nishal - 
-    1] Research about Flutter
-    2] Create the Main page for the Flutter app along with Bluetooth connectivity(for right now just turning bluetooth on and off)
+    1] Improvements upon the application
   
   Samay - 
-    1] Research about Flutter
-    2] Upload models about to be used in the shared drive 
-    3] Create Block Diagram 
-    4] Create Flowchart
+    1] Create diagrams (UML, DFD, updated methodology diagram)
+    2] Improve voice recognition for wheelchair_control
 
 
 Hardware - 

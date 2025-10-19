@@ -13,4 +13,13 @@ voicemodelmix.wav
 voicemodelpunjabi1.wav
 male_voice.wav
 /tts_audio_outputs
-.vscode
+.vscode/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+logs/
+/voice_db_embeddings
+/voice_db_processed
+/temp
+/voice_db_backup

@@ -67,6 +67,7 @@ TEST_SENTENCES = {
 # Define directory paths.
 MODELS_DIR = "./models"
 OUTPUT_DIR = "./tts_audio_outputs"
+OPTIMIZED_DIR = "./optimized_models"  # ADDED
 
 # --- Helper Functions ---
 
@@ -75,7 +76,8 @@ def setup_directories():
     print("--- Setting up directories ---")
     os.makedirs(MODELS_DIR, exist_ok=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    print(f"Directories '{MODELS_DIR}' and '{OUTPUT_DIR}' are ready.")
+    os.makedirs(OPTIMIZED_DIR, exist_ok=True)  # ADDED
+    print(f"Directories '{MODELS_DIR}', '{OUTPUT_DIR}' and '{OPTIMIZED_DIR}' are ready.")
 
 def download_file(url, save_path):
     """Downloads a file from a URL to a specified path if it doesn't already exist."""
@@ -127,6 +129,23 @@ def synthesize_speech(model_name, language, gender, text):
     except FileNotFoundError:
         print("Error: 'piper' command not found. Please ensure 'piper-tts' is installed.")
 
+def _mirror_to_optimized(model_name):
+    """
+    Copy voice files into optimized_models for unified access.
+    """
+    try:
+        import shutil
+        src_onnx = os.path.join(MODELS_DIR, f"{model_name}.onnx")
+        src_json = os.path.join(MODELS_DIR, f"{model_name}.onnx.json")
+        dst_onnx = os.path.join(OPTIMIZED_DIR, f"{model_name}.onnx")
+        dst_json = os.path.join(OPTIMIZED_DIR, f"{model_name}.onnx.json")
+        if os.path.exists(src_onnx) and not os.path.exists(dst_onnx):
+            shutil.copy2(src_onnx, dst_onnx)
+        if os.path.exists(src_json) and not os.path.exists(dst_json):
+            shutil.copy2(src_json, dst_json)
+    except Exception as e:
+        print(f"Mirror failed for {model_name}: {e}")
+
 # --- Main Execution ---
 
 def main():
@@ -146,6 +165,7 @@ def main():
         download_success = download_file(model_info["onnx_url"], onnx_path)
         if download_success:
             download_file(model_info["json_url"], json_path)
+        _mirror_to_optimized(model_info["name"])  # ADDED
 
     # Run synthesis tests for each downloaded voice.
     for model_info in MODELS_TO_PROCESS:
