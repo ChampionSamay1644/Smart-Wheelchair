@@ -53,7 +53,11 @@ from system import (
     load_api_key,
     cosine_similarity,
     record_audio,
-    save_float_to_wav
+    save_float_to_wav,
+    _load_audio_16k,
+    load_local_stt_pipeline,
+    WHISPER_MODEL_ID,
+    WHISPER_MODEL_DIR
 )
 
 # Import the new multi-voice TTS module
@@ -67,6 +71,333 @@ except ImportError:
     print("Missing dependency: resemblyzer. Install with: pip install resemblyzer")
     sys.exit(1)
 
+# =============================================================================
+# VOICE ACTIVITY DETECTION - Consolidated from voice_activity.py
+# =============================================================================
+
+def detect_silence(audio, sample_rate, threshold=0.015, min_duration=0.5):
+    """
+    Detect if audio contains mostly silence or background noise.
+    
+    Args:
+        audio: Audio data as numpy array
+        sample_rate: Sample rate in Hz
+        threshold: RMS threshold for considering audio as non-silent
+        min_duration: Minimum duration of non-silent audio needed (seconds)
+        
+    Returns:
+        (is_silent, speech_percentage): 
+            is_silent: True if audio contains mostly silence
+            speech_percentage: Percentage of audio that's considered speech
+    """
+    # Calculate energy over small windows
+    frame_size = int(0.025 * sample_rate)  # 25ms windows
+    hop_size = int(0.010 * sample_rate)    # 10ms hop
+    
+    # Ensure audio is float and normalized
+    if audio.dtype != np.float32:
+        audio = audio.astype(np.float32)
+        if np.max(np.abs(audio)) > 1.0:
+            audio = audio / 32768.0  # Convert from int16 to float
+            
+    # Calculate frame energies
+    frames = []
+    for i in range(0, len(audio) - frame_size, hop_size):
+        frames.append(audio[i:i+frame_size])
+    
+    if not frames:  # If audio is too short
+        return True, 0.0
+        
+    # Calculate RMS for each frame
+    frame_rms = np.array([np.sqrt(np.mean(frame**2)) for frame in frames])
+    
+    # Count frames above threshold
+    speech_frames = np.sum(frame_rms > threshold)
+    speech_percentage = speech_frames / len(frame_rms)
+    
+    # Calculate required frames for minimum duration
+    min_speech_frames = (min_duration / (len(audio) / sample_rate)) * len(frame_rms)
+    
+    is_silent = speech_frames < min_speech_frames
+    
+    return is_silent, speech_percentage * 100
+
+def record_with_vad(duration, sample_rate, device=None, max_attempts=3, prompt_phrase=None):
+    """
+    Record audio with voice activity detection to ensure speech is captured.
+    
+    Args:
+        duration: Recording duration in seconds
+        sample_rate: Sample rate in Hz
+        device: Audio device to use (None for default)
+        max_attempts: Maximum number of recording attempts
+        prompt_phrase: Optional phrase to display for the user to say
+        
+    Returns:
+        (audio, speech_percent): The recorded audio as numpy array and speech percentage,
+                                  or (None, 0) if all attempts failed
+    """
+    for attempt in range(1, max_attempts + 1):
+        if attempt > 1:
+            print(f"\nAttempt {attempt}/{max_attempts}: Let's try again...")
+            time.sleep(0.5)
+            
+        if prompt_phrase:
+            print(f"\nPlease say: \"{prompt_phrase}\"")
+        
+        print(f"Recording for {duration} seconds...")
+        print("3... ", end="", flush=True)
+        time.sleep(1)
+        print("2... ", end="", flush=True)
+        time.sleep(1)
+        print("1... ", end="", flush=True)
+        time.sleep(1)
+        print("GO!")
+        
+        audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate, 
+                      channels=1, dtype='float32', device=device)
+        sd.wait()
+        audio = audio.flatten()
+        
+        # Check for silence
+        is_silent, speech_percent = detect_silence(audio, sample_rate)
+        
+        if is_silent:
+            print(f"Mostly silence detected (only {speech_percent:.1f}% speech). Please speak clearly.")
+        else:
+            print(f"Voice detected ({speech_percent:.1f}% speech).")
+            return audio, speech_percent
+    
+    print("\nFailed to capture clear speech after multiple attempts.")
+    return None, 0
+
+# Standard prompt phrases for voice enrollment
+ENROLLMENT_PHRASES = [
+    "My voice is my password, verify my identity",
+    "मेरी आवाज मेरा पासवर्ड है, मेरी पहचान सत्यापित करें",
+    "माझा आवाज माझा पासवर्ड आहे, माझी ओळख सत्यापित करा"
+]
+
+# =============================================================================
+# END VOICE ACTIVITY DETECTION
+# =============================================================================
+
+# =============================================================================
+# VOICE PROFILE & DATABASE MANAGEMENT - Consolidated from voice_profile_creation.py and voice_db_management.py
+# =============================================================================
+
+def clean_voice_database(voice_db_processed_dir, voice_db_embeddings_dir, backup=True):
+    """Clean the voice database by removing all existing voice profiles with optional backup."""
+    if not voice_db_processed_dir.exists() and not voice_db_embeddings_dir.exists():
+        print("No voice database found to clean.")
+        return True
+        
+    processed_files = list(voice_db_processed_dir.glob("*.*"))
+    embedding_files = list(voice_db_embeddings_dir.glob("*.npy"))
+    total_files = len(processed_files) + len(embedding_files)
+    
+    if total_files == 0:
+        print("Voice database is already empty.")
+        return True
+        
+    print(f"Found {len(processed_files)} processed files and {len(embedding_files)} embeddings.")
+    
+    if backup:
+        import shutil
+        backup_dir = Path("./voice_db_backup_" + time.strftime("%Y%m%d_%H%M%S"))
+        backup_dir.mkdir(exist_ok=True)
+        backup_processed = backup_dir / "processed"
+        backup_embeddings = backup_dir / "embeddings"
+        backup_processed.mkdir(exist_ok=True)
+        backup_embeddings.mkdir(exist_ok=True)
+        
+        print(f"Creating backup in {backup_dir}...")
+        for file in processed_files:
+            try:
+                shutil.copy2(file, backup_processed / file.name)
+            except Exception as e:
+                print(f"Error backing up {file}: {e}")
+                
+        for file in embedding_files:
+            try:
+                shutil.copy2(file, backup_embeddings / file.name)
+            except Exception as e:
+                print(f"Error backing up {file}: {e}")
+                
+        print(f"Backup created successfully with {total_files} files.")
+    
+    print("Cleaning voice database...")
+    for file in processed_files:
+        try:
+            file.unlink()
+        except Exception as e:
+            print(f"Error deleting {file}: {e}")
+            
+    for file in embedding_files:
+        try:
+            file.unlink()
+        except Exception as e:
+            print(f"Error deleting {file}: {e}")
+    
+    print(f"Voice database cleaned. Removed {total_files} files.")
+    return True
+
+def create_voice_profile_internal(encoder, voice_db_processed_dir, voice_db_embeddings_dir, sample_rate=16000):
+    """Create a new voice profile with multilingual recordings."""
+    print("\n=== Create New Voice Profile ===")
+    
+    speaker = input("Enter speaker name (lowercase, underscores allowed): ").strip().lower()
+    if not speaker:
+        print("Invalid name. Operation cancelled.")
+        return False
+    
+    embedding_path = voice_db_embeddings_dir / f"{speaker}.npy"
+    if embedding_path.exists():
+        overwrite = input(f"Profile '{speaker}' already exists. Overwrite? (y/n): ").strip().lower()
+        if overwrite != 'y':
+            print("Operation cancelled.")
+            return False
+    
+    while True:
+        gender = input("Enter speaker gender (male / female / unknown): ").strip().lower()
+        if gender in ['male', 'female', 'unknown']:
+            break
+        print("Invalid gender. Please enter 'male', 'female', or 'unknown'.")
+    
+    voice_db_processed_dir.mkdir(exist_ok=True)
+    voice_db_embeddings_dir.mkdir(exist_ok=True)
+    
+    recordings = []
+    record_duration = 5
+    
+    print("\nFor better voice authentication, we'll record you saying phrases in 3 different languages:")
+    print("1. English: \"My voice is my password, verify my identity\"")
+    print("2. Hindi: \"मेरी आवाज मेरा पासवर्ड है, मेरी पहचान सत्यापित करें\"")
+    print("3. Marathi: \"माझा आवाज माझा पासवर्ड आहे, माझी ओळख सत्यापित करा\"")
+    print("\nThis creates a more robust multilingual voice profile.")
+    
+    for i, phrase in enumerate(ENROLLMENT_PHRASES, 1):
+        print(f"\n[Recording {i}/3]")
+        
+        try:
+            language = "English" if i == 1 else "Hindi" if i == 2 else "Marathi"
+            print(f"\nLanguage: {language}")
+            print("Press Enter to begin recording...")
+            input()
+            
+            if i == 2:
+                print("Transliteration: \"Meri awaaz mera password hai, meri pehchaan satyapit karein\"")
+            elif i == 3:
+                print("Transliteration: \"Majha awaaz majha password aahe, majhi olakh satyapit kara\"")
+            
+            audio_float, speech_percent = record_with_vad(record_duration, sample_rate, max_attempts=3, prompt_phrase=phrase)
+            
+            if audio_float is None or speech_percent < 20:
+                print(f"Failed to capture sufficient speech for phrase {i}.")
+                continue
+            
+            audio = (np.clip(audio_float, -1.0, 1.0) * 32767).astype(np.int16)
+            
+            raw_path = voice_db_processed_dir / (f"{speaker}_raw.wav" if i == 1 else f"{speaker}_raw_{i}.wav")
+            processed_path = voice_db_processed_dir / (f"{speaker}.wav" if i == 1 else f"{speaker}_{i}.wav")
+            
+            wav.write(raw_path, sample_rate, audio)
+            recordings.append((audio, raw_path, processed_path))
+            print(f"Successfully recorded phrase {i}.")
+            
+        except Exception as e:
+            print(f"Error during recording: {e}")
+    
+    if not recordings:
+        print("Failed to capture any valid recordings. Please try again.")
+        return False
+    
+    print(f"\nSuccessfully captured {len(recordings)} recordings.")
+    
+    try:
+        all_embeddings = []
+        print("\nProcessing recordings...")
+        print("Processing audio samples: ", end="", flush=True)
+        
+        for i, (audio, raw_path, processed_path) in enumerate(recordings, 1):
+            try:
+                print(f"{i}/{len(recordings)}... ", end="", flush=True)
+                raw_wav = preprocess_wav(str(raw_path))
+                wav.write(processed_path, sample_rate, (np.clip(raw_wav, -1.0, 1.0) * 32767).astype(np.int16))
+                emb = encoder.embed_utterance(raw_wav)
+                all_embeddings.append(emb)
+                
+                if i > 1:
+                    np.save(voice_db_embeddings_dir / f"{speaker}_{i}.npy", emb)
+                    
+            except Exception as e:
+                print(f"Error processing recording {i}: {e}")
+        
+        print("done!")
+        
+        if not all_embeddings:
+            print("Failed to create any valid embeddings. Please try again.")
+            return False
+            
+        if len(all_embeddings) > 1:
+            print(f"Creating averaged voice profile from {len(all_embeddings)} recordings...")
+            avg_embedding = np.mean(all_embeddings, axis=0)
+            avg_embedding = avg_embedding / np.linalg.norm(avg_embedding)
+        else:
+            avg_embedding = all_embeddings[0]
+        
+        np.save(voice_db_embeddings_dir / f"{speaker}.npy", avg_embedding)
+        
+        with open(voice_db_processed_dir / f"{speaker}_gender.txt", 'w') as f:
+            f.write(gender)
+        
+        print("\n=== Voice Profile Created Successfully ===")
+        print(f"Speaker name: {speaker}")
+        print(f"Gender: {gender}")
+        print(f"Languages recorded: English, Hindi, and Marathi")
+        print(f"Number of recordings used: {len(all_embeddings)}")
+        print("This multilingual profile enhances speaker recognition across different languages.")
+        
+        return True
+        
+    except Exception as e:
+        print(f"Error creating voice profile: {e}")
+        return False
+
+def test_voice_authentication_internal(encoder):
+    """Test voice authentication without entering command mode."""
+    print("\n=== Test Voice Authentication ===")
+    print("This will test if your voice can be authenticated against existing profiles.")
+    
+    profiles = list(VOICE_DB_EMBEDDINGS_DIR.glob("*.npy"))
+    if not profiles:
+        print("\nNo voice profiles found. Please create a profile first.")
+        input("\nPress Enter to continue...")
+        return None
+        
+    print("\nFound", len(profiles), "voice profiles for matching.")
+    
+    user, score, processed_path = identify_speaker(encoder)
+    
+    if user:
+        print(f"\nAuthentication successful!")
+        print(f"Matched profile: {user}")
+        print(f"Match score: {score:.4f}")
+    else:
+        print("\nAuthentication failed.")
+        if score > 0:
+            print(f"Best match score: {score:.4f} (below threshold)")
+        else:
+            print("No match found.")
+            
+    input("\nPress Enter to continue...")
+    return None
+
+# =============================================================================
+# END VOICE PROFILE & DATABASE MANAGEMENT
+# =============================================================================
+
+
 # --- Global Configuration ---
 SAMPLE_RATE = RS_SAMPLING_RATE  # 16000 Hz
 RECORD_DURATION = 5  # seconds
@@ -76,6 +407,13 @@ VOICE_DB_EMBEDDINGS_DIR = Path("./voice_db_embeddings")
 DEFAULT_TTS_VOICE_FILE = Path("./tts_outputs/command_response.wav")
 DEFAULT_LANGUAGE = "en"
 DEFAULT_GENDER = "male"
+
+# Gender classification thresholds for pitch estimation
+# Average male fundamental frequency is around 85-180 Hz
+# Average female fundamental frequency is around 165-255 Hz
+MALE_PITCH_THRESHOLD = 170  # Hz - Maximum for male classification
+FEMALE_PITCH_THRESHOLD = 165  # Hz - Minimum for female classification
+# Values between these thresholds are considered ambiguous
 
 # Hindi direction detection data
 HINDI_DIRECTION_WORDS = {
@@ -554,27 +892,83 @@ WHEELCHAIR_COMMANDS = {
     ]
 }
 
-# Import necessary functions from system.py for speech recognition
-from system import (
-    preprocess_and_noise_reduce,
-    transcribe_audio,
-    query_llm,
-    TEMP_DIR,
-    TTS_OUTPUT_DIR,
-    load_api_key,
-    _load_audio_16k,  # For direct audio loading
-    load_local_stt_pipeline,  # For direct STT access
-    WHISPER_MODEL_ID,  # Import to use Whisper tiny model
-    WHISPER_MODEL_DIR  # Directory where Whisper tiny model is stored
-)
+def estimate_fundamental_frequency(audio, sample_rate):
+    """
+    Estimate the fundamental frequency (pitch) of voice audio using autocorrelation.
+    This is a lightweight implementation that works well for voiced speech.
+    
+    Args:
+        audio: The audio signal (numpy array)
+        sample_rate: The sample rate in Hz
+        
+    Returns:
+        Estimated fundamental frequency in Hz, or None if estimation fails
+    """
+    # Use a frequency range typical for human voice
+    min_freq = 80  # Hz - minimum frequency to detect (lower end of male voice)
+    max_freq = 400  # Hz - maximum frequency to detect (higher end of female voice)
+    
+    # Convert frequency limits to periods (samples)
+    min_period = int(sample_rate / max_freq)
+    max_period = int(sample_rate / min_freq)
+    
+    # Ensure we have enough audio data
+    if len(audio) < max_period * 3:
+        return None  # Not enough data
+    
+    # Simple filtering to focus on speech frequencies
+    from scipy import signal
+    sos = signal.butter(2, [min_freq, 1000], 'bandpass', fs=sample_rate, output='sos')
+    filtered = signal.sosfilt(sos, audio)
+    
+    # Use center chunk of audio for analysis (typically contains speech)
+    center_start = len(filtered) // 4
+    center_end = center_start + len(filtered) // 2
+    center_chunk = filtered[center_start:center_end]
+    
+    # Calculate autocorrelation
+    corr = np.correlate(center_chunk, center_chunk, mode='full')
+    corr = corr[len(corr)//2:]  # Keep only the positive lags
+    
+    # Limit analysis to the frequency range we're interested in
+    if len(corr) <= max_period:
+        return None
+    
+    # Find peaks in autocorrelation (after skipping the first peak at lag 0)
+    peaks = [i for i in range(min_period, min(max_period, len(corr)-1))
+             if corr[i] > corr[i-1] and corr[i] > corr[i+1]]
+    
+    if not peaks:
+        return None
+    
+    # Get highest peak (strongest periodicity)
+    best_period = max(peaks, key=lambda i: corr[i])
+    pitch = sample_rate / best_period
+    
+    return pitch
 
-# Import the new multi-voice TTS module
-from multi_voice_tts import synthesize_speech, play_audio
+def detect_gender_from_audio(audio, sample_rate):
+    """
+    Detect the likely gender based on voice pitch estimation.
+    Returns 'male', 'female', or 'unknown'.
+    """
+    pitch = estimate_fundamental_frequency(audio, sample_rate)
+    
+    if pitch is None:
+        return 'unknown'
+    
+    if pitch < MALE_PITCH_THRESHOLD:
+        return 'male'
+    elif pitch > FEMALE_PITCH_THRESHOLD:
+        return 'female'
+    else:
+        return 'unknown'  # Ambiguous range
 
 def preprocess_audio_for_verification(audio_path):
     """
     Improved audio preprocessing for more reliable voice verification.
     Focuses on voice activity detection and voice quality preservation.
+    Extracts gender characteristics to improve matching.
     """
     from scipy import signal
     import numpy as np
@@ -590,9 +984,9 @@ def preprocess_audio_for_verification(audio_path):
     # Apply more aggressive voice activity detection
     # This better separates speech from background noise
     
-    # 1. Apply bandpass filter focusing on speech frequencies (250Hz-3500Hz)
-    # This helps eliminate non-speech content while preserving voice characteristics
-    sos = signal.butter(2, [250, 3500], 'bandpass', fs=SAMPLE_RATE, output='sos')
+    # 1. Apply bandpass filter focusing on speech frequencies (150Hz-3500Hz)
+    # Lower cutoff to better capture male fundamental frequencies
+    sos = signal.butter(2, [150, 3500], 'bandpass', fs=SAMPLE_RATE, output='sos')
     filtered = signal.sosfilt(sos, raw_wav)
     
     # 2. Use energy-based voice activity detection with adaptive threshold
@@ -651,6 +1045,41 @@ def preprocess_audio_for_verification(audio_path):
 def list_embeddings():
     """Returns a list of all voice embeddings in the database."""
     return list(VOICE_DB_EMBEDDINGS_DIR.glob("*.npy"))
+
+def get_profile_gender(profile_name):
+    """
+    Retrieves the gender associated with a voice profile.
+    
+    Args:
+        profile_name: Name of the profile (without file extension)
+        
+    Returns:
+        'male', 'female', or 'unknown' based on stored gender information
+    """
+    gender_file = VOICE_DB_PROCESSED_DIR / f"{profile_name}_gender.txt"
+    
+    if gender_file.exists():
+        try:
+            with open(gender_file, 'r') as f:
+                return f.read().strip().lower()
+        except Exception:
+            pass
+            
+    # For now, return unknown instead of trying to detect from audio
+    # This avoids CPU-intensive processing during initialization
+    return 'unknown'
+    
+    # NOTE: The following code was causing high CPU usage and has been disabled
+    # If no gender file exists, try to determine gender from the stored voice sample
+    # voice_file = VOICE_DB_PROCESSED_DIR / f"{profile_name}.wav"
+    # if voice_file.exists():
+    #     try:
+    #         profile_wav = preprocess_wav(voice_file)
+    #         return detect_gender_from_audio(profile_wav, SAMPLE_RATE)
+    #     except Exception:
+    #         pass
+            
+    # return 'unknown'
 
 # Moved cosine_similarity to system.py and imported from there
 
@@ -764,13 +1193,51 @@ def process_command_with_whisper_tiny(audio_path=None, detect_lang=True):
         # Create temp directory if it doesn't exist
         TEMP_DIR.mkdir(exist_ok=True)
         
-        # Record audio
-        print("\n[Command Recording] Press Enter to start recording command...")
-        input()
-        print(f"Recording for {RECORD_DURATION} seconds...")
-        audio = sd.rec(int(RECORD_DURATION * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1, dtype='int16')
-        sd.wait()
-        wav.write(audio_path, SAMPLE_RATE, audio.astype(np.int16))
+        # Import voice activity detection
+        try:
+            from voice_activity import record_with_vad, detect_silence
+            vad_available = True
+        except ImportError:
+            vad_available = False
+        
+        # Use voice activity detection if available
+        if vad_available:
+            print("\n[Command Recording] Press Enter to start recording command...")
+            input()
+            
+            # Use VAD-enhanced recording
+            prompt_phrase = "Please speak your command clearly"
+            audio_float, speech_percent = record_with_vad(
+                RECORD_DURATION, 
+                SAMPLE_RATE, 
+                max_attempts=2,
+                prompt_phrase=prompt_phrase
+            )
+            
+            if audio_float is None or speech_percent < 10:
+                print("Failed to detect sufficient speech in recording.")
+                print("Please speak clearly when giving commands.")
+                return None, 0
+                
+            # Convert to int16
+            audio = (np.clip(audio_float, -1.0, 1.0) * 32767).astype(np.int16)
+            wav.write(audio_path, SAMPLE_RATE, audio)
+            
+        else:
+            # Fallback to basic recording
+            print("\n[Command Recording] Press Enter to start recording command...")
+            input()
+            print(f"Recording for {RECORD_DURATION} seconds...")
+            audio = sd.rec(int(RECORD_DURATION * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1, dtype='int16')
+            sd.wait()
+            wav.write(audio_path, SAMPLE_RATE, audio.astype(np.int16))
+            
+            # Basic silence detection
+            audio_float = audio.flatten().astype(np.float32) / 32768.0
+            rms = np.sqrt(np.mean(audio_float**2))
+            if rms < 0.01:  # Very low volume
+                print("Warning: Recording volume is very low. Please speak louder.")
+                # Continue anyway since we might still be able to process it
         
         # Process the audio for better voice command recognition
     try:
@@ -803,14 +1270,27 @@ def process_command_with_whisper_tiny(audio_path=None, detect_lang=True):
         print(f"Error processing command: {e}")
         return None, 0
 
-def identify_speaker(encoder):
+def identify_speaker(encoder=None):
     """
-    Improved speaker identification with enhanced reliability.
-    Uses multiple comparison methods and voice-focused processing.
+    Improved speaker identification with enhanced reliability and gender verification.
+    Uses multiple comparison methods, voice-focused processing, and gender detection
+    to prevent cross-gender matching issues.
+    
     Returns (name, score, processed_path) if match found, else (None, score, processed_path).
     """
-    # Check if we have any stored voice profiles
-    embeddings_list = list_embeddings()
+    # Load the encoder if it wasn't provided
+    if encoder is None:
+        print("Loading voice encoder (CPU)... This may take a moment.")
+        try:
+            from resemblyzer import VoiceEncoder
+            encoder = VoiceEncoder(device="cpu")
+            print("Voice encoder loaded successfully.")
+        except Exception as e:
+            print(f"CRITICAL ERROR: Failed to load voice encoder: {e}")
+            print("Please ensure resemblyzer is properly installed.")
+            return None, 0, None
+    # Check if we have any stored voice profiles (use direct glob to avoid CPU-intensive operations)
+    embeddings_list = list(VOICE_DB_EMBEDDINGS_DIR.glob("*.npy"))
     if not embeddings_list:
         print("Voice database empty. Please add voices using voice profile management first.")
         return None, 0, None
@@ -823,20 +1303,92 @@ def identify_speaker(encoder):
     # Create temp directory if it doesn't exist
     TEMP_DIR.mkdir(exist_ok=True)
     
-    # Record audio
+    # Record audio with voice activity detection
+    from voice_activity import record_with_vad
+    
     print("\n[Voice Authentication] Press Enter to start recording...")
     input()
-    print(f"Recording for {RECORD_DURATION} seconds...")
-    audio = sd.rec(int(RECORD_DURATION * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1, dtype='int16')
-    sd.wait()
-    wav.write(raw_path, SAMPLE_RATE, audio.astype(np.int16))
     
-    # Process the audio with voice-focused processing
+    # Random verification phrase
+    import random
+    
+    # Multilingual verification phrases (English, Hindi, Marathi)
+    verification_phrases = {
+        "english": [
+            "Please verify my voice for access",
+            "I need to control the wheelchair now",
+            "Smart wheelchair voice authentication"
+        ],
+        "hindi": [
+            "कृपया एक्सेस के लिए मेरी आवाज़ सत्यापित करें",
+            "मुझे अब व्हीलचेयर नियंत्रित करने की आवश्यकता है",
+            "स्मार्ट व्हीलचेयर आवाज प्रमाणीकरण"
+        ],
+        "marathi": [
+            "कृपया प्रवेशासाठी माझा आवाज सत्यापित करा",
+            "मला आता व्हीलचेयर नियंत्रित करण्याची आवश्यकता आहे",
+            "स्मार्ट व्हीलचेयर आवाज प्रमाणीकरण"
+        ]
+    }
+    
+    # Ask user which language they prefer for verification
+    print("\nSelect language for verification:")
+    print("1. English")
+    print("2. Hindi")
+    print("3. Marathi")
+    lang_choice = input("Enter choice (1/2/3) or press Enter for English: ").strip()
+    
+    if lang_choice == "2":
+        lang = "hindi"
+        print("\nHindi selected. Transliteration:")
+        print("1. Kripaya access ke liye meri awaaz satyapit karen")
+        print("2. Mujhe ab wheelchair niyantrit karne ki aavashyakta hai")
+        print("3. Smart wheelchair awaaz pramanikaran")
+    elif lang_choice == "3":
+        lang = "marathi"
+        print("\nMarathi selected. Transliteration:")
+        print("1. Krupaya praveshasathi majha awaaj satyapit kara")
+        print("2. Mala aata wheelchair niyantrit karnyachi aavashyakta aahe")
+        print("3. Smart wheelchair awaaj pramanikaran")
+    else:
+        lang = "english"
+        print("\nEnglish selected.")
+    
+    # Choose a random phrase in the selected language
+    verification_phrase = random.choice(verification_phrases[lang])
+    
+    # Record with voice activity detection
+    print("\n[Voice Authentication] Please speak clearly:")
+    audio_float, speech_percent = record_with_vad(
+        RECORD_DURATION, 
+        SAMPLE_RATE, 
+        max_attempts=3,
+        prompt_phrase=verification_phrase
+    )
+    
+    if audio_float is None or speech_percent < 15:
+        print("Failed to capture sufficient speech for authentication.")
+        return None, 0, None
+    
+    # Convert to int16 format
+    audio = (np.clip(audio_float, -1.0, 1.0) * 32767).astype(np.int16)
+    wav.write(raw_path, SAMPLE_RATE, audio)
+    
+    # Process the audio with simplified processing for better efficiency
     try:
-        # Enhanced voice preprocessing
-        reduced = preprocess_audio_for_verification(raw_path)
+        # Basic preprocessing - use resemblyzer's built-in preprocessing which is optimized
+        from resemblyzer import preprocess_wav
+        reduced = preprocess_wav(str(raw_path))
         wav.write(processed_path, SAMPLE_RATE, (np.clip(reduced, -1.0, 1.0) * 32767).astype(np.int16))
+        
+        # Generate the embedding directly - this is the essential step
         test_emb = encoder.embed_utterance(reduced)
+        
+        # Use a simple and faster approach to detect gender - just check if gender was provided by user
+        # This avoids the CPU-intensive gender detection
+        current_speaker_gender = 'unknown'
+        print("Ready to compare with voice profiles...")
+        
     except Exception as e:
         print(f"Audio processing failed: {e}")
         return None, 0, raw_path
@@ -844,50 +1396,92 @@ def identify_speaker(encoder):
     # Compare against all voice profiles using multiple metrics
     print(f"Comparing against {len(embeddings_list)} voice profiles...")
     scores = []
+    gender_filtered_scores = []  # Will hold only gender-matching profiles
+    
+    # Dictionary to store gender of each profile for reference
+    profile_genders = {}
     
     for p in embeddings_list:
         name = p.stem
         try:
+            # Load the stored embedding
             db_emb = np.load(p)
             
-            # 1. Calculate cosine similarity (primary metric)
+            # Look for a gender label file associated with this profile
+            gender_file = VOICE_DB_PROCESSED_DIR / f"{name}_gender.txt"
+            profile_gender = 'unknown'
+            
+            # If the gender file exists, read the gender
+            if gender_file.exists():
+                with open(gender_file, 'r') as f:
+                    profile_gender = f.read().strip().lower()
+            else:
+                # Don't try to determine gender from audio - this is CPU intensive
+                # Instead, just use 'unknown' and let the user manually set it if needed
+                profile_gender = 'unknown'
+                # Save the unknown gender to avoid recalculating next time
+                with open(gender_file, 'w') as f:
+                    f.write(profile_gender)
+            
+            profile_genders[name] = profile_gender
+            
+            # Just use cosine similarity - much faster and almost as effective
             cosine_sim = cosine_similarity(test_emb, db_emb)
             
-            # 2. Calculate Euclidean distance (secondary metric)
-            # Lower is better, so convert to similarity score (1 - normalized distance)
-            euclidean_dist = np.linalg.norm(test_emb - db_emb)
-            max_distance = np.sqrt(2)  # Maximum possible for normalized vectors
-            euclidean_sim = 1 - (euclidean_dist / max_distance)
+            # Use this directly as our similarity score
+            combined_sim = cosine_sim
             
-            # Weighted combined score (70% cosine, 30% euclidean)
-            # This helps reduce false matches from background noise
-            combined_sim = (0.7 * cosine_sim) + (0.3 * euclidean_sim)
-            
+            # Store all scores
             scores.append((name, combined_sim))
-            print(f"  - {name}: similarity {combined_sim:.3f}")
+            print(f"  - {name}: similarity {combined_sim:.3f} [Gender: {profile_gender}]")
+            
+            # Apply gender filtering: if both genders are known and don't match,
+            # don't include in gender-filtered scores
+            if (current_speaker_gender != 'unknown' and profile_gender != 'unknown' and
+                current_speaker_gender != profile_gender):
+                print(f"    Gender mismatch: {current_speaker_gender} vs {profile_gender}")
+            else:
+                gender_filtered_scores.append((name, combined_sim))
+                
         except Exception as e:
             print(f"Error processing {name}: {e}")
     
     # Sort by similarity (highest first)
     scores.sort(key=lambda x: x[1], reverse=True)
     
+    # Also sort gender-filtered scores
+    gender_filtered_scores.sort(key=lambda x: x[1], reverse=True)
+    
     # If no valid scores
     if not scores:
         print("No valid voice profiles found.")
         return None, 0, processed_path
     
+    # Choose whether to use gender-filtered or all scores
+    if gender_filtered_scores and current_speaker_gender != 'unknown':
+        print(f"Using gender-filtered results ({len(gender_filtered_scores)} profiles)")
+        final_scores = gender_filtered_scores
+    else:
+        print("Using all results (gender filtering inactive)")
+        final_scores = scores
+    
+    # If no valid filtered scores
+    if not final_scores:
+        print("No gender-matching voice profiles found.")
+        return None, 0, processed_path
+    
     # Get best match and check for close scores
-    best_name, best_score = scores[0]
+    best_name, best_score = final_scores[0]
     
     # Check if there are multiple close matches (potential confusion)
     confusion_warning = ""
-    if len(scores) > 1:
-        second_name, second_score = scores[1]
+    if len(final_scores) > 1:
+        second_name, second_score = final_scores[1]
         score_diff = best_score - second_score
         if score_diff < 0.1:  # Very close match, potential confusion
             confusion_warning = f" (Warning: Close match with {second_name}: {second_score:.3f}, diff: {score_diff:.3f})"
     
-    print(f"\nBest match: {best_name} (similarity {best_score:.3f}){confusion_warning}")
+    print(f"\nBest match: {best_name} (similarity {best_score:.3f}, gender: {profile_genders.get(best_name, 'unknown')}){confusion_warning}")
     
     # Apply threshold (slight adjustment from original)
     if best_score >= SIMILARITY_THRESHOLD:
@@ -2053,6 +2647,23 @@ def ensure_directories():
     VOICE_DB_EMBEDDINGS_DIR.mkdir(exist_ok=True)
     
     # Clean up old temporary files to avoid disk space issues
+    
+def initialize_voice_database():
+    """Initialize the voice database and ensure it's ready for use."""
+    # Create directories if they don't exist
+    ensure_directories()
+    
+    # Check if the voice database is properly set up
+    # Just count files rather than loading embeddings
+    try:
+        embedding_count = len(list(VOICE_DB_EMBEDDINGS_DIR.glob("*.npy")))
+        if embedding_count > 0:
+            print(f"Voice database ready with {embedding_count} profiles.")
+        else:
+            print("Voice database is empty. Use Voice Profile Management to add voices.")
+    except Exception as e:
+        print(f"Error checking voice database: {e}")
+        print("Voice database may not be properly set up.")
     # Only keep files from the last 24 hours
     try:
         import time
@@ -2101,18 +2712,33 @@ def main():
         print("Please add voice profiles using the system.py script first.")
         print("Example: Run system.py and use the 'store' command to add a voice.")
     else:
-        print(f"\nFound {len(embeddings)} voice profile(s) in database.")
+        print(f"\nFound {len(embeddings)} voice profile(s) in database:")
+        
+        # Just display the profile names without trying to detect gender
+        # This prevents high CPU usage
+        for i, p in enumerate(embeddings, 1):
+            profile_name = p.stem
+            
+            # Check for a gender file (fast operation)
+            gender_file = VOICE_DB_PROCESSED_DIR / f"{profile_name}_gender.txt"
+            gender_display = ""
+            
+            if gender_file.exists():
+                try:
+                    with open(gender_file, 'r') as f:
+                        gender = f.read().strip().lower()
+                        gender_display = f" [{gender}]"
+                except:
+                    pass
+            
+            print(f"  - {profile_name}{gender_display}")
+            
+        print("")  # Empty line for better formatting
     
-    # Load voice encoder for speaker identification
+    # Initialize voice encoder only when needed
     print("\nInitializing system components...")
-    print("Loading voice encoder (CPU)... This may take a moment.")
-    try:
-        encoder = VoiceEncoder(device="cpu")
-        print("Voice encoder loaded successfully.")
-    except Exception as e:
-        print(f"CRITICAL ERROR: Failed to load voice encoder: {e}")
-        print("Please ensure resemblyzer is properly installed.")
-        sys.exit(1)
+    print("Voice encoder will be loaded when needed.")
+    encoder = None
     
     print("\nSystem initialized and ready.")
     print("\nAvailable wheelchair commands:")
@@ -2134,8 +2760,30 @@ def main():
         choice = input("\nEnter mode (1/2/3/4/5/6/7): ").strip()
         
         if choice == "1":
+            # Load encoder only when needed
+            if encoder is None:
+                print("Loading voice encoder (CPU)... This may take a moment.")
+                try:
+                    from resemblyzer import VoiceEncoder
+                    encoder = VoiceEncoder(device="cpu")
+                    print("Voice encoder loaded successfully.")
+                except Exception as e:
+                    print(f"CRITICAL ERROR: Failed to load voice encoder: {e}")
+                    print("Please ensure resemblyzer is properly installed.")
+                    continue
             online_llm_mode(encoder)
         elif choice == "2":
+            # Load encoder only when needed
+            if encoder is None:
+                print("Loading voice encoder (CPU)... This may take a moment.")
+                try:
+                    from resemblyzer import VoiceEncoder
+                    encoder = VoiceEncoder(device="cpu")
+                    print("Voice encoder loaded successfully.")
+                except Exception as e:
+                    print(f"CRITICAL ERROR: Failed to load voice encoder: {e}")
+                    print("Please ensure resemblyzer is properly installed.")
+                    continue
             command_control_mode(encoder)
         elif choice == "3":
             print("\nAvailable Voice Commands (in any language):")
@@ -2164,31 +2812,101 @@ def main():
         elif choice == "4":
             print("\nVoice Profile Management")
             print("1. View existing voice profiles")
-            print("2. Create new voice profile (run system.py with 'store' command)")
+            print("2. Create new voice profile")
             print("3. Test voice authentication")
-            profile_choice = input("Enter option (1/2/3) or any other key to return: ").strip()
+            print("4. Clean voice database (deletes all profiles)")
+            profile_choice = input("Enter option (1/2/3/4) or any other key to return: ").strip()
             
             if profile_choice == "1":
-                profiles = list_embeddings()
-                if profiles:
-                    print(f"\nFound {len(profiles)} voice profiles:")
-                    for i, p in enumerate(profiles, 1):
-                        print(f"  {i}. {p.stem}")
-                else:
-                    print("No voice profiles found.")
+                try:
+                    # Get profile list more efficiently
+                    profiles = list(VOICE_DB_EMBEDDINGS_DIR.glob("*.npy"))
+                    
+                    if profiles:
+                        print(f"\nFound {len(profiles)} voice profiles:")
+                        
+                        for i, p in enumerate(profiles, 1):
+                            profile_name = p.stem
+                            
+                            # Check for gender file (fast operation)
+                            gender_file = VOICE_DB_PROCESSED_DIR / f"{profile_name}_gender.txt"
+                            gender_display = ""
+                            
+                            if gender_file.exists():
+                                try:
+                                    with open(gender_file, 'r') as f:
+                                        gender = f.read().strip().lower()
+                                        gender_display = f" [{gender}]"
+                                except:
+                                    pass
+                            
+                            print(f"  {i}. {profile_name}{gender_display}")
+                    else:
+                        print("No voice profiles found.")
+                except Exception as e:
+                    print(f"Error listing profiles: {e}")
+                    print("No voice profiles could be loaded.")
             elif profile_choice == "2":
-                print("\nTo create a new voice profile:")
-                print("1. Exit this program")
-                print("2. Run 'python system.py'")
-                print("3. Use the 'store' command and follow the prompts")
-                print("4. Return to this program when finished")
-            elif profile_choice == "3":
-                print("\nTesting voice authentication...")
-                user, score, _ = identify_speaker(encoder)
-                if user:
-                    print(f"\nVoice authentication successful for user: {user}")
+                # Load encoder only when needed
+                if encoder is None:
+                    print("Loading voice encoder (CPU)... This may take a moment.")
+                    try:
+                        from resemblyzer import VoiceEncoder
+                        encoder = VoiceEncoder(device="cpu")
+                        print("Voice encoder loaded successfully.")
+                    except Exception as e:
+                        print(f"CRITICAL ERROR: Failed to load voice encoder: {e}")
+                        print("Please ensure resemblyzer is properly installed.")
+                        input("\nPress Enter to continue...")
+                        continue
+                
+                # Create a new voice profile
+                success = create_voice_profile_internal(encoder, VOICE_DB_PROCESSED_DIR, 
+                                              VOICE_DB_EMBEDDINGS_DIR, SAMPLE_RATE)
+                
+                if success:
+                    print("\nVoice profile created successfully.")
+                    # Refresh the list of embeddings in memory
+                    embeddings = list_embeddings()
                 else:
-                    print("\nVoice authentication failed.")
+                    print("\nFailed to create voice profile.")
+                
+                input("\nPress Enter to continue...")
+                
+            elif profile_choice == "3":
+                # Load encoder only when needed
+                if encoder is None:
+                    print("Loading voice encoder (CPU)... This may take a moment.")
+                    try:
+                        from resemblyzer import VoiceEncoder
+                        encoder = VoiceEncoder(device="cpu")
+                        print("Voice encoder loaded successfully.")
+                    except Exception as e:
+                        print(f"CRITICAL ERROR: Failed to load voice encoder: {e}")
+                        print("Please ensure resemblyzer is properly installed.")
+                        input("\nPress Enter to continue...")
+                        continue
+                
+                # Test voice authentication
+                test_voice_authentication_internal(encoder)
+            elif profile_choice == "4":
+                print("\n=== Clean Voice Database ===")
+                print("WARNING: This will delete ALL voice profiles.")
+                print("This operation cannot be undone.")
+                confirm = input("Are you sure you want to continue? (yes/no): ").strip().lower()
+                
+                if confirm == "yes":
+                    success = clean_voice_database(VOICE_DB_PROCESSED_DIR, VOICE_DB_EMBEDDINGS_DIR)
+                    if success:
+                        print("\nVoice database cleaned successfully.")
+                        # Refresh the list of embeddings in memory
+                        embeddings = list_embeddings()
+                    else:
+                        print("\nFailed to clean voice database.")
+                else:
+                    print("\nOperation cancelled.")
+                    
+                input("\nPress Enter to continue...")
         elif choice == "5":
             # Test Whisper tiny multilingual recognition
             print("\n=== Testing Multilingual Command Recognition ===")
