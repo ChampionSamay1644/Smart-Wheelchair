@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "561119263095",
+    "project_id": "smartnav-14012",
+    "storage_bucket": "smartnav-14012.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:561119263095:android:5d44085a40c461b620c972",
+        "android_client_info": {
+          "package_name": "com.example.smart_wheelchair_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBQjTppustXZNViBOXRN-luKkryKdZOKAg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
