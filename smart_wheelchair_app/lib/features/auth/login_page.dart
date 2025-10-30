@@ -37,11 +37,9 @@ class _LoginPageState extends State<LoginPage> {
 
     if (success) {
       // Navigate to appropriate dashboard based on role
-      String route = switch (widget.role) {
-        UserRole.patient => '/patient_dashboard',
-        UserRole.guardian => '/guardian_dashboard',
-        UserRole.doctor => '/doctor_dashboard',
-      };
+      String route = widget.role == UserRole.guardian
+          ? '/guardian_dashboard'
+          : '/patient_dashboard';
 
       Navigator.pushReplacementNamed(context, route);
     } else {
@@ -54,11 +52,9 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     // Pre-fill email for testing based on role
-    _emailController.text = switch (widget.role) {
-      UserRole.patient => 'patient@test.com',
-      UserRole.guardian => 'guardian@test.com',
-      UserRole.doctor => 'doctor@test.com',
-    };
+    _emailController.text = widget.role == UserRole.guardian
+        ? 'guardian@test.com'
+        : 'patient@test.com';
 
     return Scaffold(
       appBar: AppBar(title: Text('Login as ${widget.role.displayName}')),
@@ -68,11 +64,9 @@ class _LoginPageState extends State<LoginPage> {
           padding: const EdgeInsets.all(16),
           children: [
             Icon(
-              switch (widget.role) {
-                UserRole.patient => FontAwesomeIcons.wheelchair,
-                UserRole.guardian => FontAwesomeIcons.userShield,
-                UserRole.doctor => FontAwesomeIcons.userDoctor,
-              },
+              widget.role == UserRole.guardian
+                  ? FontAwesomeIcons.userShield
+                  : FontAwesomeIcons.wheelchair,
               size: 64,
               color: Theme.of(context).primaryColor,
             ),

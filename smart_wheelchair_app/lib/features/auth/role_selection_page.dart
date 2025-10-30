@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
-import '../../../core/enums.dart';
+import '../../core/enums.dart';
 
 class RoleSelectionPage extends StatelessWidget {
   const RoleSelectionPage({super.key});
@@ -16,7 +16,7 @@ class RoleSelectionPage extends StatelessWidget {
             children: [
               const SizedBox(height: 48),
               Text(
-                'Welcome to\nSmart Wheelchair',
+                'Welcome to\nSmartNav',
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),
@@ -47,12 +47,7 @@ class RoleSelectionPage extends StatelessWidget {
                       FontAwesomeIcons.userShield,
                       Colors.green,
                     ),
-                    _buildRoleCard(
-                      context,
-                      UserRole.doctor,
-                      FontAwesomeIcons.userDoctor,
-                      Colors.red,
-                    ),
+                    // doctor role removed per new requirements
                   ],
                 ),
               ),
@@ -94,14 +89,9 @@ class RoleSelectionPage extends StatelessWidget {
   }
 
   void _onRoleSelected(BuildContext context, UserRole role) {
-    String route;
-    switch (role) {
-      case UserRole.patient:
-        route = '/patient_dashboard';
-      case UserRole.doctor:
-        route = '/doctor_dashboard';
-      case UserRole.guardian:
-        route = '/guardian_dashboard';
+    String route = '/patient_dashboard';
+    if (role == UserRole.guardian) {
+      route = '/guardian_dashboard';
     }
     Navigator.pushReplacementNamed(context, route);
   }
