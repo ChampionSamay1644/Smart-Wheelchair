@@ -1,27 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
 
 class MovementLogPage extends StatelessWidget {
   const MovementLogPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Movement Log'),
-          bottom: const TabBar(
-            tabs: [
-              Tab(text: 'Movement History'),
-              Tab(text: 'Map View'),
-            ],
-          ),
-        ),
-        body: TabBarView(children: [_buildMovementHistory(), _buildMapView()]),
-      ),
+    return Scaffold(
+      appBar: AppBar(title: const Text('Movement Log')),
+      body: _buildMovementHistory(),
     );
   }
 
@@ -63,22 +50,6 @@ class MovementLogPage extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-
-  Widget _buildMapView() {
-    // Example coordinates for demonstration
-    const center = LatLng(51.509364, -0.128928);
-
-    return FlutterMap(
-      options: const MapOptions(initialCenter: center, initialZoom: 15.0),
-      children: [
-        TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'com.example.smart_wheelchair_app',
-        ),
-        // Example markers and polylines could be added here
-      ],
     );
   }
 

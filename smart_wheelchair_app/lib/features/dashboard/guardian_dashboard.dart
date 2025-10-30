@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../core/providers/auth_provider.dart';
+import '../../features/outdoor_navigation/outdoor_navigation_page.dart';
+import '../../core/providers/notifications_provider.dart';
 import 'package:provider/provider.dart';
 
 class GuardianDashboard extends StatelessWidget {
@@ -14,6 +16,82 @@ class GuardianDashboard extends StatelessWidget {
       appBar: AppBar(
         title: Text('Guardian: ${user?.name ?? ""}'),
         actions: [
+          // notification bell with unread count
+          Consumer<NotificationsProvider>(
+            builder: (context, np, _) {
+              return IconButton(
+                icon: Stack(
+                  children: [
+                    const Icon(Icons.notifications),
+                    if (np.unreadCount > 0)
+                      Positioned(
+                        right: 0,
+                        top: 0,
+                        child: Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                          constraints: const BoxConstraints(
+                            minWidth: 16,
+                            minHeight: 16,
+                          ),
+                          child: Center(
+                            child: Text(
+                              np.unreadCount.toString(),
+                              style: const TextStyle(
+                                fontSize: 10,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                onPressed: () {
+                  // Open a simple dialog listing notifications
+                  showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Notifications'),
+                      content: SizedBox(
+                        width: double.maxFinite,
+                        child: ListView(
+                          children: np.events
+                              .map(
+                                (e) => ListTile(
+                                  title: Text(e.title),
+                                  subtitle: Text(e.body),
+                                  trailing: Text(
+                                    '${e.time.hour}:${e.time.minute.toString().padLeft(2, '0')}',
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () {
+                            np.markAllRead();
+                            Navigator.pop(context);
+                          },
+                          child: const Text('Mark all read'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Close'),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: () async {
@@ -24,106 +102,107 @@ class GuardianDashboard extends StatelessWidget {
           ),
         ],
       ),
-      body: GridView.count(
-        padding: const EdgeInsets.all(16),
-        crossAxisCount: 2,
-        mainAxisSpacing: 16,
-        crossAxisSpacing: 16,
+      body: Column(
         children: [
-          _buildCard(
-            context,
-            'Patient Location',
-            FontAwesomeIcons.locationDot,
-            Colors.blue,
-            () {
-              Navigator.pushNamed(context, '/patient_location');
-            },
-          ),
-          _buildCard(
-            context,
-            'Health Status',
-            FontAwesomeIcons.heartPulse,
-            Colors.red,
-            () {
-              Navigator.pushNamed(context, '/health_status');
-            },
-          ),
-          _buildCard(
-            context,
-            'Emergency Alert',
-            FontAwesomeIcons.bell,
-            Colors.orange,
-            () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Emergency alert sent to patient'),
-                  backgroundColor: Colors.orange,
-                ),
-              );
-            },
-          ),
-          _buildCard(
-            context,
-            'Stop Wheelchair',
-            FontAwesomeIcons.stop,
-            Colors.red,
-            () {
-              showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('Stop Wheelchair?'),
-                  content: const Text(
-                    'Are you sure you want to stop the wheelchair?',
+          // Map taking up most of the screen
+          Expanded(
+            flex: 3, // Takes up 75% of the screen
+            child: Container(
+              margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              decoration: BoxDecoration(
+                color: Colors.grey[200],
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withAlpha(25),
+                    blurRadius: 10,
+                    offset: const Offset(0, 5),
                   ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Cancel'),
-                    ),
-                    TextButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Wheelchair stopped'),
-                            backgroundColor: Colors.red,
-                          ),
-                        );
-                      },
-                      child: const Text('Stop'),
-                    ),
-                  ],
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: const OutdoorNavigationPage(remoteView: true),
+              ),
+            ),
+          ),
+          // Bottom control strip
+          Container(
+            margin: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                Expanded(
+                  child: _buildControlButton(
+                    context,
+                    'Movement Log',
+                    FontAwesomeIcons.list,
+                    Colors.purple,
+                    () => Navigator.pushNamed(context, '/movement_log'),
+                  ),
                 ),
-              );
-            },
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _buildControlButton(
+                    context,
+                    'Health Status',
+                    FontAwesomeIcons.heartPulse,
+                    Colors.red,
+                    () => Navigator.pushNamed(context, '/health_status'),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildCard(
+  Widget _buildControlButton(
     BuildContext context,
     String title,
     IconData icon,
     Color color,
     VoidCallback onTap,
   ) {
-    return Card(
-      elevation: 4,
-      child: InkWell(
-        onTap: onTap,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            FaIcon(icon, size: 48, color: color),
-            const SizedBox(height: 16),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-          ],
+    return Container(
+      height: 60,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [color, color.withAlpha((0.8 * 255).round())],
+        ),
+        borderRadius: BorderRadius.circular(15),
+        boxShadow: [
+          BoxShadow(
+            color: color.withAlpha((0.3 * 255).round()),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(15),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              FaIcon(icon, size: 24, color: Colors.white),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
