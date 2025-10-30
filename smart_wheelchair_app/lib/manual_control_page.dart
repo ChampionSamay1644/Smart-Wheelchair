@@ -1,6 +1,11 @@
 // ignore_for_file: avoid_print
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:geolocator/geolocator.dart';
+import 'core/widgets/hold_button.dart';
+import 'core/providers/notifications_provider.dart';
+import 'core/providers/movement_log_provider.dart';
 
 // ignore: use_key_in_widget_constructors
 class ManualControlPage extends StatelessWidget {
@@ -24,7 +29,25 @@ class ManualControlPage extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               _buildDirectionButton(
-                onPressed: () => print('Move Up'),
+                onPressed: () async {
+                  // Log movement and try to include current GPS coordinates
+                  final movementLog = context.read<MovementLogProvider>();
+                  double? lat, lon;
+                  try {
+                    final p = await Geolocator.getCurrentPosition();
+                    lat = p.latitude;
+                    lon = p.longitude;
+                  } catch (_) {}
+                  try {
+                    movementLog.addEntry(
+                      'manual',
+                      'forward',
+                      lat: lat,
+                      lon: lon,
+                    );
+                  } catch (_) {}
+                  print('Move Up');
+                },
                 icon: Icons.arrow_upward,
                 label: 'Forward',
               ),
@@ -33,13 +56,47 @@ class ManualControlPage extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   _buildDirectionButton(
-                    onPressed: () => print('Move Left'),
+                    onPressed: () async {
+                      final movementLog = context.read<MovementLogProvider>();
+                      double? lat, lon;
+                      try {
+                        final p = await Geolocator.getCurrentPosition();
+                        lat = p.latitude;
+                        lon = p.longitude;
+                      } catch (_) {}
+                      try {
+                        movementLog.addEntry(
+                          'manual',
+                          'left',
+                          lat: lat,
+                          lon: lon,
+                        );
+                      } catch (_) {}
+                      print('Move Left');
+                    },
                     icon: Icons.arrow_back,
                     label: 'Left',
                   ),
                   const SizedBox(width: 100),
                   _buildDirectionButton(
-                    onPressed: () => print('Move Right'),
+                    onPressed: () async {
+                      final movementLog = context.read<MovementLogProvider>();
+                      double? lat, lon;
+                      try {
+                        final p = await Geolocator.getCurrentPosition();
+                        lat = p.latitude;
+                        lon = p.longitude;
+                      } catch (_) {}
+                      try {
+                        movementLog.addEntry(
+                          'manual',
+                          'right',
+                          lat: lat,
+                          lon: lon,
+                        );
+                      } catch (_) {}
+                      print('Move Right');
+                    },
                     icon: Icons.arrow_forward,
                     label: 'Right',
                   ),
@@ -47,7 +104,24 @@ class ManualControlPage extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               _buildDirectionButton(
-                onPressed: () => print('Move Down'),
+                onPressed: () async {
+                  final movementLog = context.read<MovementLogProvider>();
+                  double? lat, lon;
+                  try {
+                    final p = await Geolocator.getCurrentPosition();
+                    lat = p.latitude;
+                    lon = p.longitude;
+                  } catch (_) {}
+                  try {
+                    movementLog.addEntry(
+                      'manual',
+                      'backward',
+                      lat: lat,
+                      lon: lon,
+                    );
+                  } catch (_) {}
+                  print('Move Down');
+                },
                 icon: Icons.arrow_downward,
                 label: 'Backward',
               ),
@@ -55,12 +129,33 @@ class ManualControlPage extends StatelessWidget {
           ),
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: Colors.red,
-        onPressed: () {
-          print('EMERGENCY STOP ACTIVATED');
-        },
-        child: Icon(Icons.warning),
+      floatingActionButton: SizedBox(
+        height: 64,
+        width: 64,
+        child: FloatingActionButton(
+          backgroundColor: Colors.red,
+          onPressed: null,
+          child: HoldButton(
+            holdDuration: const Duration(seconds: 2),
+            onHold: () {
+              try {
+                context.read<NotificationsProvider>().addEvent(
+                  'Emergency',
+                  'Emergency triggered from Manual Control',
+                );
+              } catch (_) {}
+              print('EMERGENCY STOP ACTIVATED');
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('EMERGENCY STOP ACTIVATED'),
+                  backgroundColor: Colors.red,
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
+            child: const Icon(Icons.warning),
+          ),
+        ),
       ),
     );
   }

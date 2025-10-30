@@ -74,45 +74,7 @@ class SettingsPage extends StatelessWidget {
                 print('Connection status tapped');
               },
             ),
-            _buildSettingItem(
-              context,
-              'Battery',
-              Icons.battery_full,
-              'View battery status',
-              onTap: () {
-                showModalBottomSheet(
-                  context: context,
-                  builder: (context) => Container(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const ListTile(
-                          leading: Icon(
-                            Icons.battery_full,
-                            color: Colors.green,
-                          ),
-                          title: Text('Battery Level: 75%'),
-                          subtitle: Text('Estimated 4 hours remaining'),
-                        ),
-                        const LinearProgressIndicator(
-                          value: 0.75,
-                          backgroundColor: Colors.grey,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            Colors.green,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('Close'),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
+            // Battery entry removed from Settings (moved to main page top)
           ]),
         ],
       ),
