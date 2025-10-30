@@ -6,12 +6,16 @@ class MapWidget extends StatefulWidget {
   final LatLng currentPosition;
   final List<LatLng> routePoints;
   final LatLng? destination;
+  final bool isGuardianView;
+  final double? patientSpeed;
 
   const MapWidget({
     super.key,
     required this.currentPosition,
     required this.routePoints,
     this.destination,
+    this.isGuardianView = false,
+    this.patientSpeed,
   });
 
   @override
@@ -64,12 +68,59 @@ class _MapWidgetState extends State<MapWidget> {
           markers: [
             Marker(
               point: widget.currentPosition,
-              width: 40,
-              height: 40,
-              child: const Icon(
-                Icons.my_location,
-                color: Colors.blue,
-                size: 32,
+              width: 80,
+              height: 80,
+              child: Column(
+                children: [
+                  if (widget.isGuardianView && widget.patientSpeed != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withAlpha(40),
+                            blurRadius: 4,
+                          ),
+                        ],
+                      ),
+                      child: Text(
+                        '${(widget.patientSpeed! * 3.6).toStringAsFixed(1)} km/h',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 4),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: widget.isGuardianView ? Colors.red : Colors.blue,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color:
+                              (widget.isGuardianView ? Colors.red : Colors.blue)
+                                  .withAlpha(100),
+                          blurRadius: 8,
+                          spreadRadius: 4,
+                        ),
+                      ],
+                    ),
+                    padding: const EdgeInsets.all(8),
+                    child: Icon(
+                      widget.isGuardianView
+                          ? Icons.wheelchair_pickup
+                          : Icons.my_location,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                  ),
+                ],
               ),
             ),
             if (widget.destination != null)
