@@ -2,12 +2,12 @@
 
 import 'package:flutter/material.dart';
 import 'package:smart_wheelchair_app/features/outdoor_navigation/outdoor_navigation_page.dart';
+import 'features/auth/splash_screen.dart';
+import 'features/auth/role_selection_page.dart';
 import 'package:provider/provider.dart';
 import 'core/providers/auth_provider.dart';
 import 'core/providers/notifications_provider.dart';
 import 'core/providers/movement_log_provider.dart';
-import 'features/auth/splash_screen.dart';
-import 'features/auth/role_selection_page.dart';
 // doctor dashboard removed
 import 'features/dashboard/guardian_dashboard.dart';
 import 'core/widgets/hold_button.dart';
@@ -35,17 +35,21 @@ void main() async {
   await Firebase.initializeApp();
 
   // Initialize FirebaseService (helper for analytics/messaging, if any)
-  final firebaseService = await FirebaseService.initialize();
+  // Run initialize in background to avoid blocking app startup and causing frame skips
+  FirebaseService.initialize();
 
   // Initialize core services
   final authService = AuthService();
   final locationService = LocationService();
   final healthReportService = HealthReportService();
 
-  // Initialize notification system
+  // Initialize notification system asynchronously after app start
   final notificationsProvider = NotificationsProvider();
   final notificationService = NotificationService(notificationsProvider);
-  await notificationService.initialize();
+  // Don't block startup - initialize in background
+  notificationService.initialize().catchError((e) {
+    debugPrint('Failed to initialize notifications: $e');
+  });
 
   // Set up error handling
   FlutterError.onError = (details) {
@@ -57,7 +61,6 @@ void main() async {
     MultiProvider(
       providers: [
         // Core services available via Provider
-        Provider<FirebaseService>.value(value: firebaseService),
         Provider<AuthService>.value(value: authService),
 
         // State management providers
@@ -100,18 +103,18 @@ class MyApp extends StatelessWidget {
           ),
         ),
       ),
-      initialRoute: '/',
+      initialRoute: '/splash',
       routes: {
-        '/': (context) => const SplashScreen(),
+        '/splash': (context) => const SplashScreen(),
         '/role_selection': (context) => const RoleSelectionPage(),
+        '/': (context) =>
+            const MyHomePage(title: 'Patient Dashboard'), // Patient Dashboard
         '/patient_dashboard': (context) =>
             const MyHomePage(title: 'Patient Dashboard'),
-        // doctor route removed
         '/guardian_dashboard': (context) => const GuardianDashboard(),
         '/health_status': (context) => const HealthStatusPage(),
         '/movement_log': (context) => const MovementLogPage(),
         '/manual_control': (context) => ManualControlPage(),
-        // Manual and joystick merged into a single drive control page (joystick)
         '/joystick_control': (context) => JoystickControlPage(),
         '/voice_control': (context) => VoiceControlPage(),
         '/remote_control': (context) => RemoteControlPage(),
@@ -246,7 +249,10 @@ class _MyHomePageState extends State<MyHomePage> {
               leading: Icon(Icons.logout),
               title: Text('Logout'),
               onTap: () async {
-                await context.read<AuthProvider>().logout();
+                // If AuthProvider is available, call logout
+                try {
+                  await context.read<AuthProvider>().logout();
+                } catch (_) {}
                 if (!context.mounted) return;
                 Navigator.pushReplacementNamed(context, '/role_selection');
               },
@@ -369,6 +375,13 @@ class _MyHomePageState extends State<MyHomePage> {
               } catch (e) {
                 // provider not available in some test contexts
               }
+              // Also log emergency in movement logs (and Firestore)
+              try {
+                context.read<MovementLogProvider>().addEntry(
+                  'emergency',
+                  'EMERGENCY STOP',
+                );
+              } catch (_) {}
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
                   content: Text('EMERGENCY STOP ACTIVATED'),
@@ -376,7 +389,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   duration: Duration(seconds: 2),
                 ),
               );
-              print('EMERGENCY STOP ACTIVATED');
+              debugPrint('EMERGENCY STOP ACTIVATED');
             },
             child: const Icon(Icons.warning_amber_rounded, size: 32),
           ),
