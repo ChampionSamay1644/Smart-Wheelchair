@@ -209,11 +209,10 @@ class NoisePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()..style = PaintingStyle.fill;
-    int density = 5000;
+    int density = 2500; // Reduced density for better performance
 
     for (int i = 0; i < density; i++) {
       final opacity = _random.nextDouble() * 0.06 + 0.02;
-      // --- REPLACED ---
       paint.color = Colors.white.withValues(alpha: opacity);
       final x = _random.nextDouble() * size.width;
       final y = _random.nextDouble() * size.height;
@@ -222,5 +221,8 @@ class NoisePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(NoisePainter oldDelegate) => false;
+
+  @override
+  bool shouldRebuildSemantics(NoisePainter oldDelegate) => false;
 }
