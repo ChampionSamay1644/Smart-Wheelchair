@@ -20,7 +20,7 @@ class SettingsPage extends StatelessWidget {
               Icons.speed,
               'Adjust maximum speed limit',
               onTap: () {
-                print('Speed settings tapped');
+                debugPrint('Speed settings tapped');
               },
             ),
             _buildSettingItem(
@@ -29,7 +29,7 @@ class SettingsPage extends StatelessWidget {
               Icons.tune,
               'Adjust control sensitivity',
               onTap: () {
-                print('Sensitivity settings tapped');
+                debugPrint('Sensitivity settings tapped');
               },
             ),
           ]),
@@ -41,7 +41,7 @@ class SettingsPage extends StatelessWidget {
               Icons.emergency,
               'Add or edit emergency contacts',
               onTap: () {
-                print('Emergency contacts tapped');
+                debugPrint('Emergency contacts tapped');
               },
             ),
             _buildSettingItem(
@@ -50,7 +50,7 @@ class SettingsPage extends StatelessWidget {
               Icons.record_voice_over,
               'Customize voice commands',
               onTap: () {
-                print('Voice commands settings tapped');
+                debugPrint('Voice commands settings tapped');
               },
             ),
           ]),
@@ -62,7 +62,7 @@ class SettingsPage extends StatelessWidget {
               Icons.info,
               'View system information',
               onTap: () {
-                print('Device info tapped');
+                debugPrint('Device info tapped');
               },
             ),
             _buildSettingItem(
@@ -71,7 +71,7 @@ class SettingsPage extends StatelessWidget {
               Icons.bluetooth,
               'Check device connectivity',
               onTap: () {
-                print('Connection status tapped');
+                debugPrint('Connection status tapped');
               },
             ),
             // Battery entry removed from Settings (moved to main page top)
