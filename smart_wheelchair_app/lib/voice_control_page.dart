@@ -42,19 +42,19 @@ class VoiceControlPageState extends State<VoiceControlPage> {
                   setState(() {
                     _isListening = !_isListening;
                     if (_isListening) {
-                      print('Voice Recognition Started');
+                      debugPrint('Voice Recognition Started');
                       // Simulate receiving a command after 2 seconds
                       Future.delayed(const Duration(seconds: 2), () {
                         if (_isListening) {
                           // Check if still listening
                           setState(() {
                             _lastCommand = 'Move Forward';
-                            print('Command received: $_lastCommand');
+                            debugPrint('Command received: $_lastCommand');
                           });
                         }
                       });
                     } else {
-                      print('Voice Recognition Stopped');
+                      debugPrint('Voice Recognition Stopped');
                     }
                   });
                 },
@@ -95,7 +95,7 @@ class VoiceControlPageState extends State<VoiceControlPage> {
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.red,
         onPressed: () {
-          print('EMERGENCY STOP ACTIVATED');
+          debugPrint('EMERGENCY STOP ACTIVATED');
         },
         child: Icon(Icons.warning),
       ),
