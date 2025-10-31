@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import '../../core/services/firebase_service.dart';
+import '../../core/services/auth_service.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class MovementLogPage extends StatelessWidget {
   const MovementLogPage({super.key});
@@ -8,113 +10,88 @@ class MovementLogPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Movement Log')),
-      body: _buildMovementHistory(),
+      body: const _MovementLogBody(),
     );
   }
+}
 
-  Widget _buildMovementHistory() {
-    final movements = [
-      _Movement(
-        time: DateTime.now().subtract(const Duration(minutes: 30)),
-        type: MovementType.forward,
-        duration: const Duration(seconds: 45),
-        distance: 15.0,
-      ),
-      _Movement(
-        time: DateTime.now().subtract(const Duration(hours: 1)),
-        type: MovementType.turn,
-        duration: const Duration(seconds: 10),
-        angle: 90.0,
-      ),
-      _Movement(
-        time: DateTime.now().subtract(const Duration(hours: 2)),
-        type: MovementType.backward,
-        duration: const Duration(seconds: 20),
-        distance: 5.0,
-      ),
-      // Add more movements as needed
-    ];
+class _MovementLogBody extends StatefulWidget {
+  const _MovementLogBody();
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(8),
-      itemCount: movements.length,
-      itemBuilder: (context, index) {
-        final movement = movements[index];
-        return Card(
-          margin: const EdgeInsets.symmetric(vertical: 4),
-          child: ListTile(
-            leading: _buildMovementIcon(movement.type),
-            title: Text(_getMovementDescription(movement)),
-            subtitle: Text(_formatTime(movement.time)),
-            trailing: Text(_formatDuration(movement.duration)),
-          ),
+  @override
+  State<_MovementLogBody> createState() => _MovementLogBodyState();
+}
+
+class _MovementLogBodyState extends State<_MovementLogBody> {
+  String? _patientId;
+
+  @override
+  void initState() {
+    super.initState();
+    _initPatientId();
+  }
+
+  Future<void> _initPatientId() async {
+    final user = await AuthService().currentUser;
+    if (!mounted) return;
+    if (user == null) return;
+
+    if (user.userType == 'patient') {
+      setState(() => _patientId = user.uid);
+    } else if (user.userType == 'guardian') {
+      setState(
+        () => _patientId = user.patientIds?.isNotEmpty == true
+            ? user.patientIds!.first
+            : null,
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_patientId == null) {
+      return const Center(child: Text('No patient linked'));
+    }
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseService.firestore
+          .collection('users')
+          .doc(_patientId)
+          .collection('movementLogs')
+          .orderBy('timestamp', descending: true)
+          .snapshots(),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final docs = snap.data?.docs ?? [];
+        if (docs.isEmpty) return const Center(child: Text('No movements'));
+
+        return ListView.builder(
+          padding: const EdgeInsets.all(8),
+          itemCount: docs.length,
+          itemBuilder: (context, index) {
+            final d = docs[index].data();
+            final action = d['action'] ?? '';
+            final mode = d['mode'] ?? '';
+            final ts = (d['timestamp'] as Timestamp?)?.toDate();
+            final lat = d['lat']?.toString();
+            final lon = d['lon']?.toString();
+
+            return Card(
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              child: ListTile(
+                leading: const Icon(Icons.directions),
+                title: Text(action),
+                subtitle: Text(mode + (ts != null ? ' • ${ts.toLocal()}' : '')),
+                trailing: (lat != null && lon != null)
+                    ? Text('${lat.substring(0, 6)}, ${lon.substring(0, 6)}')
+                    : null,
+              ),
+            );
+          },
         );
       },
     );
   }
-
-  Widget _buildMovementIcon(MovementType type) {
-    IconData icon;
-    Color color;
-
-    switch (type) {
-      case MovementType.forward:
-        icon = FontAwesomeIcons.arrowUp;
-        color = Colors.green;
-      case MovementType.backward:
-        icon = FontAwesomeIcons.arrowDown;
-        color = Colors.orange;
-      case MovementType.turn:
-        icon = FontAwesomeIcons.arrowRotateRight;
-        color = Colors.blue;
-    }
-
-    return CircleAvatar(
-      backgroundColor: color.withAlpha(51), // 0.2 * 255 ≈ 51
-      child: FaIcon(icon, color: color, size: 16),
-    );
-  }
-
-  String _getMovementDescription(_Movement movement) {
-    switch (movement.type) {
-      case MovementType.forward:
-        return 'Moved forward ${movement.distance?.toStringAsFixed(1)} meters';
-      case MovementType.backward:
-        return 'Moved backward ${movement.distance?.toStringAsFixed(1)} meters';
-      case MovementType.turn:
-        return 'Turned $movement.angle degrees';
-    }
-  }
-
-  String _formatTime(DateTime time) {
-    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-  }
-
-  String _formatDuration(Duration duration) {
-    final seconds = duration.inSeconds;
-    if (seconds < 60) {
-      return '$seconds sec';
-    }
-    final minutes = duration.inMinutes;
-    final remainingSeconds = seconds - (minutes * 60);
-    return '$minutes min $remainingSeconds sec';
-  }
-}
-
-enum MovementType { forward, backward, turn }
-
-class _Movement {
-  final DateTime time;
-  final MovementType type;
-  final Duration duration;
-  final double? distance;
-  final double? angle;
-
-  _Movement({
-    required this.time,
-    required this.type,
-    required this.duration,
-    this.distance,
-    this.angle,
-  });
 }
