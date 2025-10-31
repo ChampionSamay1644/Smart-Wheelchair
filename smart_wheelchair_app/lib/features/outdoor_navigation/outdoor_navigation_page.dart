@@ -60,7 +60,7 @@ class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
       const locationSettings = LocationSettings(
         accuracy: LocationAccuracy.bestForNavigation,
         distanceFilter: 0, // Update on any movement
-        timeLimit: Duration(seconds: 1), // Force updates every second
+        timeLimit: Duration(seconds: 10), // Allow longer time to get a GPS fix
       );
       _posSub = Geolocator.getPositionStream(locationSettings: locationSettings)
           .listen((pos) {
@@ -71,7 +71,7 @@ class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
             });
           });
     } catch (e) {
-      print('Failed to get location: $e');
+      debugPrint('Failed to get location: $e');
       setState(() => _currentPosition = _fallbackPosition);
     }
   }
@@ -117,7 +117,7 @@ class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
         ).showSnackBar(const SnackBar(content: Text('Geocoding failed')));
       }
     } catch (e) {
-      print('Geocoding error: $e');
+      debugPrint('Geocoding error: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -153,14 +153,14 @@ class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
           ).showSnackBar(const SnackBar(content: Text('No route found')));
         }
       } else {
-        print('Routing failed: ${res.statusCode} ${res.body}');
+        debugPrint('Routing failed: ${res.statusCode} ${res.body}');
         if (!mounted) return;
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Routing service error')));
       }
     } catch (e) {
-      print('Routing error: $e');
+      debugPrint('Routing error: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
