@@ -89,10 +89,10 @@ class RoleSelectionPage extends StatelessWidget {
   }
 
   void _onRoleSelected(BuildContext context, UserRole role) {
-    String route = '/patient_dashboard';
-    if (role == UserRole.guardian) {
-      route = '/guardian_dashboard';
-    }
+    final route = switch (role) {
+      UserRole.patient => '/patient_dashboard',
+      UserRole.guardian => '/guardian_dashboard',
+    };
     Navigator.pushReplacementNamed(context, route);
   }
 }
