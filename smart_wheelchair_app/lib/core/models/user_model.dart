@@ -4,6 +4,7 @@ class SmartWheelchairUser {
   final String name;
   final String userType; // 'patient' or 'guardian'
   final String? guardianId; // Only for patients
+  final String? connectionCode; // For patients: 6-digit code to link guardians
   final List<String>? patientIds; // Only for guardians
   final Map<String, dynamic>? healthData;
   final Map<String, dynamic>? preferences;
@@ -14,6 +15,7 @@ class SmartWheelchairUser {
     required this.name,
     required this.userType,
     this.guardianId,
+    this.connectionCode,
     this.patientIds,
     this.healthData,
     this.preferences,
@@ -26,6 +28,7 @@ class SmartWheelchairUser {
       name: data['name'] ?? '',
       userType: data['userType'] ?? '',
       guardianId: data['guardianId'],
+      connectionCode: data['connectionCode'] as String?,
       patientIds: List<String>.from(data['patientIds'] ?? []),
       healthData: data['healthData'],
       preferences: data['preferences'],
@@ -39,6 +42,7 @@ class SmartWheelchairUser {
       'name': name,
       'userType': userType,
       'guardianId': guardianId,
+      'connectionCode': connectionCode,
       'patientIds': patientIds,
       'healthData': healthData,
       'preferences': preferences,
