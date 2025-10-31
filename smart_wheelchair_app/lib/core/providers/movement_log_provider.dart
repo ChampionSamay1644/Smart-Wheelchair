@@ -1,4 +1,7 @@
 import 'package:flutter/foundation.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/firebase_service.dart';
+import '../services/auth_service.dart';
 
 class MovementEntry {
   final DateTime time;
@@ -21,15 +24,45 @@ class MovementLogProvider extends ChangeNotifier {
 
   List<MovementEntry> get entries => List.unmodifiable(_entries.reversed);
 
-  void addEntry(String mode, String action, {double? lat, double? lon}) {
-    _entries.add(MovementEntry(
-      time: DateTime.now(),
-      mode: mode,
-      action: action,
-      latitude: lat,
-      longitude: lon,
-    ));
+  /// Logs a movement locally and to Firestore under users/{patientId}/movementLogs
+  Future<void> addEntry(
+    String mode,
+    String action, {
+    double? lat,
+    double? lon,
+    String? forPatientId,
+  }) async {
+    final now = DateTime.now();
+    _entries.add(
+      MovementEntry(
+        time: now,
+        mode: mode,
+        action: action,
+        latitude: lat,
+        longitude: lon,
+      ),
+    );
     notifyListeners();
+
+    try {
+      final currentUser = await AuthService().currentUser;
+      final targetId = forPatientId ?? currentUser?.uid;
+      if (targetId == null) return;
+
+      await FirebaseService.firestore
+          .collection('users')
+          .doc(targetId)
+          .collection('movementLogs')
+          .add({
+            'action': action,
+            'mode': mode,
+            if (lat != null) 'lat': lat,
+            if (lon != null) 'lon': lon,
+            'timestamp': FieldValue.serverTimestamp(),
+          });
+    } catch (_) {
+      // Swallow Firestore errors; local log remains
+    }
   }
 
   void clear() {
