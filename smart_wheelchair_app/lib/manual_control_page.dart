@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_print
-
+// ignore: use_key_in_widget_constructors
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:geolocator/geolocator.dart';
@@ -7,8 +8,37 @@ import 'core/widgets/hold_button.dart';
 import 'core/providers/notifications_provider.dart';
 import 'core/providers/movement_log_provider.dart';
 
-// ignore: use_key_in_widget_constructors
-class ManualControlPage extends StatelessWidget {
+class ManualControlPage extends StatefulWidget {
+  const ManualControlPage({super.key});
+
+  @override
+  State<ManualControlPage> createState() => _ManualControlPageState();
+}
+
+class _ManualControlPageState extends State<ManualControlPage> {
+  Future<Position?> _safeGetPosition(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final p = await Geolocator.getCurrentPosition().timeout(
+        const Duration(seconds: 10),
+      );
+      if (!mounted) return null;
+      return p;
+    } on TimeoutException catch (_) {
+      if (!mounted) return null;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Could not get location. Please check GPS.'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return null;
+    } catch (e) {
+      debugPrint('Location error: $e');
+      return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -32,21 +62,31 @@ class ManualControlPage extends StatelessWidget {
                 onPressed: () async {
                   // Log movement and try to include current GPS coordinates
                   final movementLog = context.read<MovementLogProvider>();
+                  final messenger = ScaffoldMessenger.of(context);
                   double? lat, lon;
-                  try {
-                    final p = await Geolocator.getCurrentPosition();
+                  final p = await _safeGetPosition(context);
+                  if (p != null) {
                     lat = p.latitude;
                     lon = p.longitude;
-                  } catch (_) {}
+                  }
                   try {
-                    movementLog.addEntry(
+                    await movementLog.addEntry(
                       'manual',
                       'forward',
                       lat: lat,
                       lon: lon,
                     );
-                  } catch (_) {}
-                  print('Move Up');
+                  } catch (e) {
+                    debugPrint('Movement log error: $e');
+                    if (!mounted) return;
+                    messenger.showSnackBar(
+                      const SnackBar(
+                        content: Text('Could not log movement.'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                  debugPrint('Move Up');
                 },
                 icon: Icons.arrow_upward,
                 label: 'Forward',
@@ -58,21 +98,31 @@ class ManualControlPage extends StatelessWidget {
                   _buildDirectionButton(
                     onPressed: () async {
                       final movementLog = context.read<MovementLogProvider>();
+                      final messenger = ScaffoldMessenger.of(context);
                       double? lat, lon;
-                      try {
-                        final p = await Geolocator.getCurrentPosition();
+                      final p = await _safeGetPosition(context);
+                      if (p != null) {
                         lat = p.latitude;
                         lon = p.longitude;
-                      } catch (_) {}
+                      }
                       try {
-                        movementLog.addEntry(
+                        await movementLog.addEntry(
                           'manual',
                           'left',
                           lat: lat,
                           lon: lon,
                         );
-                      } catch (_) {}
-                      print('Move Left');
+                      } catch (e) {
+                        debugPrint('Movement log error: $e');
+                        if (!mounted) return;
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content: Text('Could not log movement.'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      }
+                      debugPrint('Move Left');
                     },
                     icon: Icons.arrow_back,
                     label: 'Left',
@@ -81,21 +131,31 @@ class ManualControlPage extends StatelessWidget {
                   _buildDirectionButton(
                     onPressed: () async {
                       final movementLog = context.read<MovementLogProvider>();
+                      final messenger = ScaffoldMessenger.of(context);
                       double? lat, lon;
-                      try {
-                        final p = await Geolocator.getCurrentPosition();
+                      final p = await _safeGetPosition(context);
+                      if (p != null) {
                         lat = p.latitude;
                         lon = p.longitude;
-                      } catch (_) {}
+                      }
                       try {
-                        movementLog.addEntry(
+                        await movementLog.addEntry(
                           'manual',
                           'right',
                           lat: lat,
                           lon: lon,
                         );
-                      } catch (_) {}
-                      print('Move Right');
+                      } catch (e) {
+                        debugPrint('Movement log error: $e');
+                        if (!mounted) return;
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content: Text('Could not log movement.'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      }
+                      debugPrint('Move Right');
                     },
                     icon: Icons.arrow_forward,
                     label: 'Right',
@@ -106,21 +166,31 @@ class ManualControlPage extends StatelessWidget {
               _buildDirectionButton(
                 onPressed: () async {
                   final movementLog = context.read<MovementLogProvider>();
+                  final messenger = ScaffoldMessenger.of(context);
                   double? lat, lon;
-                  try {
-                    final p = await Geolocator.getCurrentPosition();
+                  final p = await _safeGetPosition(context);
+                  if (p != null) {
                     lat = p.latitude;
                     lon = p.longitude;
-                  } catch (_) {}
+                  }
                   try {
-                    movementLog.addEntry(
+                    await movementLog.addEntry(
                       'manual',
                       'backward',
                       lat: lat,
                       lon: lon,
                     );
-                  } catch (_) {}
-                  print('Move Down');
+                  } catch (e) {
+                    debugPrint('Movement log error: $e');
+                    if (!mounted) return;
+                    messenger.showSnackBar(
+                      const SnackBar(
+                        content: Text('Could not log movement.'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                  debugPrint('Move Down');
                 },
                 icon: Icons.arrow_downward,
                 label: 'Backward',
@@ -144,7 +214,7 @@ class ManualControlPage extends StatelessWidget {
                   'Emergency triggered from Manual Control',
                 );
               } catch (_) {}
-              print('EMERGENCY STOP ACTIVATED');
+              debugPrint('EMERGENCY STOP ACTIVATED');
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
                   content: Text('EMERGENCY STOP ACTIVATED'),
