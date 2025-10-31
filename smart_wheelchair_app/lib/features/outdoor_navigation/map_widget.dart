@@ -50,8 +50,8 @@ class _MapWidgetState extends State<MapWidget> {
       ),
       children: [
         TileLayer(
-          urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-          subdomains: const ['a', 'b', 'c'],
+          // Use single-host OSM tile URL (avoid {s} subdomains warning)
+          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
           userAgentPackageName: 'com.example.smart_wheelchair_app',
         ),
         if (widget.routePoints.isNotEmpty)
