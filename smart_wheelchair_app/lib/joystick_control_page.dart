@@ -1,5 +1,6 @@
-// ignore_for_file: use_key_in_widget_constructors, avoid_print
+// ignore_for_file: use_key_in_widget_constructors
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:geolocator/geolocator.dart';
@@ -7,7 +8,30 @@ import 'core/widgets/hold_button.dart';
 import 'core/providers/notifications_provider.dart';
 import 'core/providers/movement_log_provider.dart';
 
-class JoystickControlPage extends StatelessWidget {
+class JoystickControlPage extends StatefulWidget {
+  const JoystickControlPage({super.key});
+
+  @override
+  State<JoystickControlPage> createState() => _JoystickControlPageState();
+}
+
+class _JoystickControlPageState extends State<JoystickControlPage> {
+  Future<Position?> _safeGetPosition() async {
+    try {
+      final p = await Geolocator.getCurrentPosition().timeout(
+        const Duration(seconds: 10),
+      );
+      if (!mounted) return null;
+      return p;
+    } on TimeoutException catch (_) {
+      debugPrint('Location timeout');
+      return null;
+    } catch (e) {
+      debugPrint('Location error: $e');
+      return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -26,21 +50,41 @@ class JoystickControlPage extends StatelessWidget {
                 context,
                 onPressed: () async {
                   final movementLog = context.read<MovementLogProvider>();
+                  final messenger = ScaffoldMessenger.of(context);
                   double? lat, lon;
-                  try {
-                    final p = await Geolocator.getCurrentPosition();
+                  final p = await _safeGetPosition();
+                  if (!mounted) return;
+                  if (p == null) {
+                    messenger.showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Could not get location. Please check GPS.',
+                        ),
+                        duration: Duration(seconds: 3),
+                      ),
+                    );
+                  } else {
                     lat = p.latitude;
                     lon = p.longitude;
-                  } catch (_) {}
+                  }
                   try {
-                    movementLog.addEntry(
+                    await movementLog.addEntry(
                       'drive',
                       'forward',
                       lat: lat,
                       lon: lon,
                     );
-                  } catch (_) {}
-                  print('Drive Forward');
+                  } catch (e) {
+                    debugPrint('Movement log error: $e');
+                    if (!mounted) return;
+                    messenger.showSnackBar(
+                      const SnackBar(
+                        content: Text('Could not log movement.'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                  debugPrint('Drive Forward');
                 },
                 icon: Icons.arrow_upward,
                 label: 'Forward',
@@ -53,21 +97,41 @@ class JoystickControlPage extends StatelessWidget {
                     context,
                     onPressed: () async {
                       final movementLog = context.read<MovementLogProvider>();
+                      final messenger = ScaffoldMessenger.of(context);
                       double? lat, lon;
-                      try {
-                        final p = await Geolocator.getCurrentPosition();
+                      final p = await _safeGetPosition();
+                      if (!mounted) return;
+                      if (p == null) {
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Could not get location. Please check GPS.',
+                            ),
+                            duration: Duration(seconds: 3),
+                          ),
+                        );
+                      } else {
                         lat = p.latitude;
                         lon = p.longitude;
-                      } catch (_) {}
+                      }
                       try {
-                        movementLog.addEntry(
+                        await movementLog.addEntry(
                           'drive',
                           'left',
                           lat: lat,
                           lon: lon,
                         );
-                      } catch (_) {}
-                      print('Drive Left');
+                      } catch (e) {
+                        debugPrint('Movement log error: $e');
+                        if (!mounted) return;
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content: Text('Could not log movement.'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      }
+                      debugPrint('Drive Left');
                     },
                     icon: Icons.arrow_back,
                     label: 'Left',
@@ -77,21 +141,41 @@ class JoystickControlPage extends StatelessWidget {
                     context,
                     onPressed: () async {
                       final movementLog = context.read<MovementLogProvider>();
+                      final messenger = ScaffoldMessenger.of(context);
                       double? lat, lon;
-                      try {
-                        final p = await Geolocator.getCurrentPosition();
+                      final p = await _safeGetPosition();
+                      if (!mounted) return;
+                      if (p == null) {
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Could not get location. Please check GPS.',
+                            ),
+                            duration: Duration(seconds: 3),
+                          ),
+                        );
+                      } else {
                         lat = p.latitude;
                         lon = p.longitude;
-                      } catch (_) {}
+                      }
                       try {
-                        movementLog.addEntry(
+                        await movementLog.addEntry(
                           'drive',
                           'right',
                           lat: lat,
                           lon: lon,
                         );
-                      } catch (_) {}
-                      print('Drive Right');
+                      } catch (e) {
+                        debugPrint('Movement log error: $e');
+                        if (!mounted) return;
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content: Text('Could not log movement.'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      }
+                      debugPrint('Drive Right');
                     },
                     icon: Icons.arrow_forward,
                     label: 'Right',
@@ -103,21 +187,41 @@ class JoystickControlPage extends StatelessWidget {
                 context,
                 onPressed: () async {
                   final movementLog = context.read<MovementLogProvider>();
+                  final messenger = ScaffoldMessenger.of(context);
                   double? lat, lon;
-                  try {
-                    final p = await Geolocator.getCurrentPosition();
+                  final p = await _safeGetPosition();
+                  if (!mounted) return;
+                  if (p == null) {
+                    messenger.showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Could not get location. Please check GPS.',
+                        ),
+                        duration: Duration(seconds: 3),
+                      ),
+                    );
+                  } else {
                     lat = p.latitude;
                     lon = p.longitude;
-                  } catch (_) {}
+                  }
                   try {
-                    movementLog.addEntry(
+                    await movementLog.addEntry(
                       'drive',
                       'backward',
                       lat: lat,
                       lon: lon,
                     );
-                  } catch (_) {}
-                  print('Drive Backward');
+                  } catch (e) {
+                    debugPrint('Movement log error: $e');
+                    if (!mounted) return;
+                    messenger.showSnackBar(
+                      const SnackBar(
+                        content: Text('Could not log movement.'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                  debugPrint('Drive Backward');
                 },
                 icon: Icons.arrow_downward,
                 label: 'Backward',
@@ -141,7 +245,7 @@ class JoystickControlPage extends StatelessWidget {
                   'Emergency triggered from Drive Control',
                 );
               } catch (_) {}
-              print('EMERGENCY STOP ACTIVATED');
+              debugPrint('EMERGENCY STOP ACTIVATED');
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
                   content: Text('EMERGENCY STOP ACTIVATED'),
