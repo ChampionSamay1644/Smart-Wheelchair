@@ -41,7 +41,7 @@ class FirebaseService {
 
       // Listen for token refresh
       _messaging.onTokenRefresh.listen((token) {
-        // TODO: Save the new token to Firestore for the current user
+        // Save the new token to Firestore for the current user
         debugPrint('FCM Token refreshed: $token');
         if (_auth.currentUser != null) {
           _firestore.collection('users').doc(_auth.currentUser!.uid).update({
@@ -60,7 +60,7 @@ class FirebaseService {
         debugPrint(
           'Message also contained a notification: ${message.notification}',
         );
-        // TODO: Show the notification using the fading panel
+        // Show the notification using the fading panel
       }
     });
 

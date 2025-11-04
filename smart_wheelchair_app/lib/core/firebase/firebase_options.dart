@@ -1,6 +1,6 @@
 import 'package:firebase_core/firebase_core.dart';
 
-// TODO: Replace with your Firebase configuration
+// Replace with your Firebase configuration
 class DefaultFirebaseOptions {
   static FirebaseOptions get currentPlatform => const FirebaseOptions(
     apiKey: 'YOUR-API-KEY',

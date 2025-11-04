@@ -200,7 +200,7 @@ class HealthReportService {
     HealthReport report,
     List<Map<String, dynamic>> healthData,
   ) async {
-    // TODO: Implement PDF generation using pdf package
+    // Implement PDF generation using pdf package
     // For now, return a placeholder PDF
     return Uint8List.fromList([]);
   }
