@@ -1,36 +1,70 @@
+// ignore_for_file: avoid_print
+
 import 'package:flutter/material.dart';
+import 'package:smart_wheelchair_app/features/outdoor_navigation/outdoor_navigation_page.dart';
+import 'package:provider/provider.dart';
+import 'core/providers/auth_provider.dart';
+import 'features/auth/splash_screen.dart';
+import 'features/auth/role_selection_page.dart';
+import 'features/dashboard/doctor_dashboard.dart';
+import 'features/dashboard/guardian_dashboard.dart';
+import 'features/dashboard/health_status_page.dart';
+import 'features/dashboard/movement_log_page.dart';
+import 'joystick_control_page.dart';
+import 'manual_control_page.dart';
+import 'remote_control_page.dart';
+import 'settings_page.dart';
+import 'voice_control_page.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(
+    MultiProvider(
+      providers: [ChangeNotifierProvider(create: (_) => AuthProvider())],
+      child: const MyApp(),
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'SmartNav Wheelchair',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        primaryColor: Colors.blue,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+          secondary: Colors.orange,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            padding: const EdgeInsets.all(20),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(15),
+            ),
+          ),
+        ),
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      initialRoute: '/',
+      routes: {
+        '/': (context) => const SplashScreen(),
+        '/role_selection': (context) => const RoleSelectionPage(),
+        '/patient_dashboard': (context) =>
+            const MyHomePage(title: 'Patient Dashboard'),
+        '/doctor_dashboard': (context) => const DoctorDashboard(),
+        '/guardian_dashboard': (context) => const GuardianDashboard(),
+        '/health_status': (context) => const HealthStatusPage(),
+        '/movement_log': (context) => const MovementLogPage(),
+        '/manual_control': (context) => ManualControlPage(),
+        '/joystick_control': (context) => JoystickControlPage(),
+        '/voice_control': (context) => VoiceControlPage(),
+        '/remote_control': (context) => RemoteControlPage(),
+        '/settings': (context) => SettingsPage(),
+        '/location': (context) => const OutdoorNavigationPage(),
+      },
+      debugShowCheckedModeBanner: false,
     );
   }
 }
@@ -54,69 +88,240 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+        backgroundColor: Theme.of(context).primaryColor,
+        title: const Text(
+          'SmartNav',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 24,
+          ),
+        ),
+        elevation: 4,
+        actions: [
+          IconButton(
+            icon: const Icon(
+              Icons.help,
+              color: Colors.white,
+            ), // Request Help icon
+            onPressed: () {
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('Help requested!')));
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.map, color: Colors.white),
+            onPressed: () {
+              Navigator.pushNamed(context, '/location'); // Map route
+            },
+          ),
+        ],
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+      drawer: Drawer(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            DrawerHeader(
+              decoration: BoxDecoration(color: Colors.blue),
+              child: Text(
+                'Patient Menu',
+                style: TextStyle(color: Colors.white, fontSize: 24),
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.health_and_safety),
+              title: Text('Health Status'),
+              onTap: () => Navigator.pushNamed(context, '/health_status'),
+            ),
+            ListTile(
+              leading: Icon(Icons.settings),
+              title: Text('Settings'),
+              onTap: () => Navigator.pushNamed(context, '/settings'),
+            ),
+            ListTile(
+              leading: Icon(Icons.logout),
+              title: Text('Logout'),
+              onTap: () async {
+                await context.read<AuthProvider>().logout();
+                if (!context.mounted) return;
+                Navigator.pushReplacementNamed(context, '/role_selection');
+              },
             ),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+      body: Column(
+        children: [
+          Expanded(
+            flex: 1,
+            child: Container(
+              margin: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.black87,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.grey[300]!),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withAlpha((0.8 * 255).round()),
+                    blurRadius: 10,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
+              child: const Stack(
+                children: [
+                  Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.camera_alt, size: 48, color: Colors.white54),
+                        SizedBox(height: 8),
+                        Text(
+                          'Camera Preview',
+                          style: TextStyle(color: Colors.white54, fontSize: 16),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 1,
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              child: GridView.count(
+                crossAxisCount: 2,
+                childAspectRatio: 1,
+                mainAxisSpacing: 16,
+                crossAxisSpacing: 16,
+                children: [
+                  _buildControlButton(
+                    context,
+                    'Remote Control',
+                    Icons.route,
+                    Colors.blue[700]!,
+                    () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => RemoteControlPage(),
+                      ),
+                    ),
+                  ),
+                  _buildControlButton(
+                    context,
+                    'Manual Control',
+                    Icons.gamepad,
+                    Colors.green[700]!,
+                    () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => ManualControlPage(),
+                      ),
+                    ),
+                  ),
+                  _buildControlButton(
+                    context,
+                    'Joystick Control',
+                    Icons.sports_esports,
+                    Colors.purple[700]!,
+                    () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => JoystickControlPage(),
+                      ),
+                    ),
+                  ),
+                  _buildControlButton(
+                    context,
+                    'Voice Control',
+                    Icons.mic,
+                    Colors.orange[700]!,
+                    () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => VoiceControlPage(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+      floatingActionButton: SizedBox(
+        height: 64,
+        width: 64,
+        child: FloatingActionButton(
+          backgroundColor: Colors.red,
+          onPressed: () {
+            print('EMERGENCY STOP ACTIVATED');
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('EMERGENCY STOP ACTIVATED'),
+                backgroundColor: Colors.red,
+                duration: Duration(seconds: 2),
+              ),
+            );
+          },
+          child: const Icon(Icons.warning_amber_rounded, size: 32),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildControlButton(
+    BuildContext context,
+    String label,
+    IconData icon,
+    Color color,
+    VoidCallback onPressed,
+  ) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [color, color.withAlpha((0.8 * 255).round())],
+        ),
+        borderRadius: BorderRadius.circular(15),
+        boxShadow: [
+          BoxShadow(
+            color: color.withAlpha((0.8 * 255).round()),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(15),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 40, color: Colors.white),
+              const SizedBox(height: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
