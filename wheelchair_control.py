@@ -377,8 +377,8 @@ def test_voice_authentication_internal(encoder):
         
     print("\nFound", len(profiles), "voice profiles for matching.")
     
-    user, score, processed_path = identify_speaker(encoder)
-    
+    user, score, processed_path = identify_speaker(encoder, is_registration=True)
+
     if user:
         print(f"\nAuthentication successful!")
         print(f"Matched profile: {user}")
@@ -1270,11 +1270,15 @@ def process_command_with_whisper_tiny(audio_path=None, detect_lang=True):
         print(f"Error processing command: {e}")
         return None, 0
 
-def identify_speaker(encoder=None):
+def identify_speaker(encoder=None, is_registration=False):
     """
     Improved speaker identification with enhanced reliability and gender verification.
     Uses multiple comparison methods, voice-focused processing, and gender detection
     to prevent cross-gender matching issues.
+    
+    Args:
+        encoder: The voice encoder model (optional)
+        is_registration: If True, use verification phrases. If False, just record voice command.
     
     Returns (name, score, processed_path) if match found, else (None, score, processed_path).
     """
@@ -1289,7 +1293,8 @@ def identify_speaker(encoder=None):
             print(f"CRITICAL ERROR: Failed to load voice encoder: {e}")
             print("Please ensure resemblyzer is properly installed.")
             return None, 0, None
-    # Check if we have any stored voice profiles (use direct glob to avoid CPU-intensive operations)
+            
+    # Check if we have any stored voice profiles
     embeddings_list = list(VOICE_DB_EMBEDDINGS_DIR.glob("*.npy"))
     if not embeddings_list:
         print("Voice database empty. Please add voices using voice profile management first.")
@@ -1303,67 +1308,61 @@ def identify_speaker(encoder=None):
     # Create temp directory if it doesn't exist
     TEMP_DIR.mkdir(exist_ok=True)
     
-    # Record audio with voice activity detection
-    from voice_activity import record_with_vad
+    prompt_phrase = None
     
-    print("\n[Voice Authentication] Press Enter to start recording...")
-    input()
-    
-    # Random verification phrase
-    import random
-    
-    # Multilingual verification phrases (English, Hindi, Marathi)
-    verification_phrases = {
-        "english": [
-            "Please verify my voice for access",
-            "I need to control the wheelchair now",
-            "Smart wheelchair voice authentication"
-        ],
-        "hindi": [
-            "कृपया एक्सेस के लिए मेरी आवाज़ सत्यापित करें",
-            "मुझे अब व्हीलचेयर नियंत्रित करने की आवश्यकता है",
-            "स्मार्ट व्हीलचेयर आवाज प्रमाणीकरण"
-        ],
-        "marathi": [
-            "कृपया प्रवेशासाठी माझा आवाज सत्यापित करा",
-            "मला आता व्हीलचेयर नियंत्रित करण्याची आवश्यकता आहे",
-            "स्मार्ट व्हीलचेयर आवाज प्रमाणीकरण"
-        ]
-    }
-    
-    # Ask user which language they prefer for verification
-    print("\nSelect language for verification:")
-    print("1. English")
-    print("2. Hindi")
-    print("3. Marathi")
-    lang_choice = input("Enter choice (1/2/3) or press Enter for English: ").strip()
-    
-    if lang_choice == "2":
-        lang = "hindi"
-        print("\nHindi selected. Transliteration:")
-        print("1. Kripaya access ke liye meri awaaz satyapit karen")
-        print("2. Mujhe ab wheelchair niyantrit karne ki aavashyakta hai")
-        print("3. Smart wheelchair awaaz pramanikaran")
-    elif lang_choice == "3":
-        lang = "marathi"
-        print("\nMarathi selected. Transliteration:")
-        print("1. Krupaya praveshasathi majha awaaj satyapit kara")
-        print("2. Mala aata wheelchair niyantrit karnyachi aavashyakta aahe")
-        print("3. Smart wheelchair awaaj pramanikaran")
-    else:
-        lang = "english"
-        print("\nEnglish selected.")
-    
-    # Choose a random phrase in the selected language
-    verification_phrase = random.choice(verification_phrases[lang])
+    if is_registration:
+        # Only show language selection and verification phrases during registration
+        verification_phrases = {
+            "english": [
+                "Please verify my voice for access",
+                "I need to control the wheelchair now",
+                "Smart wheelchair voice authentication"
+            ],
+            "hindi": [
+                "कृपया एक्सेस के लिए मेरी आवाज़ सत्यापित करें",
+                "मुझे अब व्हीलचेयर नियंत्रित करने की आवश्यकता है",
+                "स्मार्ट व्हीलचेयर आवाज प्रमाणीकरण"
+            ],
+            "marathi": [
+                "कृपया प्रवेशासाठी माझा आवाज सत्यापित करा",
+                "मला आता व्हीलचेयर नियंत्रित करण्याची आवश्यकता आहे",
+                "स्मार्ट व्हीलचेयर आवाज प्रमाणीकरण"
+            ]
+        }
+        
+        print("\nSelect language for verification:")
+        print("1. English")
+        print("2. Hindi") 
+        print("3. Marathi")
+        lang_choice = input("Enter choice (1/2/3) or press Enter for English: ").strip()
+        
+        if lang_choice == "2":
+            lang = "hindi"
+            print("\nHindi selected. Transliteration:")
+            print("1. Kripaya access ke liye meri awaaz satyapit karen")
+            print("2. Mujhe ab wheelchair niyantrit karne ki aavashyakta hai")
+            print("3. Smart wheelchair awaaz pramanikaran")
+        elif lang_choice == "3":
+            lang = "marathi"
+            print("\nMarathi selected. Transliteration:")
+            print("1. Krupaya praveshasathi majha awaaj satyapit kara")
+            print("2. Mala aata wheelchair niyantrit karnyachi aavashyakta aahe")
+            print("3. Smart wheelchair awaaj pramanikaran")
+        else:
+            lang = "english"
+            print("\nEnglish selected.")
+            
+        prompt_phrase = random.choice(verification_phrases[lang])
     
     # Record with voice activity detection
-    print("\n[Voice Authentication] Please speak clearly:")
+    print("\n[Voice Authentication] Press Enter and speak your command...")
+    input()
+    
     audio_float, speech_percent = record_with_vad(
-        RECORD_DURATION, 
-        SAMPLE_RATE, 
+        RECORD_DURATION,
+        SAMPLE_RATE,
         max_attempts=3,
-        prompt_phrase=verification_phrase
+        prompt_phrase=prompt_phrase
     )
     
     if audio_float is None or speech_percent < 15:
@@ -2544,7 +2543,7 @@ def command_control_mode(encoder):
     print("\n=== MODE 2: Voice Command Control ===")
     
     # Authenticate user
-    user, score, processed_path = identify_speaker(encoder)
+    user, score, processed_path = identify_speaker(encoder, is_registration=False)
     if not user:
         print("Authentication failed. Access denied.")
         return False
