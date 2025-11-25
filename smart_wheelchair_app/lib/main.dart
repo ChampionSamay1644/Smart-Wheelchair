@@ -4,6 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:smart_wheelchair_app/features/outdoor_navigation/outdoor_navigation_page.dart';
 import 'features/auth/splash_screen.dart';
 import 'features/auth/role_selection_page.dart';
+import 'features/auth/login_role.dart';
+import 'features/auth/signup_role.dart';
+import 'features/auth/patient_home.dart';
+import 'features/auth/caregiver_home.dart';
+import 'features/auth/generate_pair_code.dart';
+import 'features/auth/claim_pair_code.dart';
+import 'core/enums.dart';
 import 'package:provider/provider.dart';
 import 'core/providers/auth_provider.dart';
 import 'core/providers/notifications_provider.dart';
@@ -19,7 +26,10 @@ import 'remote_control_page.dart';
 import 'settings_page.dart';
 import 'voice_control_page.dart';
 
+import 'dart:async';
+
 import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
 import 'core/services/firebase_service.dart';
 import 'core/services/auth_service.dart';
 import 'core/services/location_service.dart';
@@ -28,57 +38,71 @@ import 'core/services/health_report_service.dart';
 import 'core/providers/location_provider.dart';
 import 'core/providers/health_report_provider.dart';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+void main() {
+  // Run the entire initialization inside the same zone as runApp to avoid
+  // the Flutter "Zone mismatch" error. All binding initialization and
+  // Firebase initialization must happen inside this zone.
+  runZonedGuarded(() async {
+    WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Firebase core
-  await Firebase.initializeApp();
+    // Initialize Firebase core using generated options
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
 
-  // Initialize FirebaseService (helper for analytics/messaging, if any)
-  // Run initialize in background to avoid blocking app startup and causing frame skips
-  FirebaseService.initialize();
+    // Initialize FirebaseService (helper for analytics/messaging, if any)
+    // Run initialize in background to avoid blocking app startup and causing frame skips
+    FirebaseService.initialize();
 
-  // Initialize core services
-  final authService = AuthService();
-  final locationService = LocationService();
-  final healthReportService = HealthReportService();
+    // Initialize core services
+    final authService = AuthService();
+    final locationService = LocationService();
+    final healthReportService = HealthReportService();
 
-  // Initialize notification system asynchronously after app start
-  final notificationsProvider = NotificationsProvider();
-  final notificationService = NotificationService(notificationsProvider);
-  // Don't block startup - initialize in background
-  notificationService.initialize().catchError((e) {
-    debugPrint('Failed to initialize notifications: $e');
+    // Initialize notification system asynchronously after app start
+    final notificationsProvider = NotificationsProvider();
+    final notificationService = NotificationService(notificationsProvider);
+    // Don't block startup - initialize in background
+    notificationService.initialize().catchError((e) {
+      debugPrint('Failed to initialize notifications: $e');
+    });
+
+    // Set up error handling to capture uncaught Flutter errors and print stack traces
+    FlutterError.onError = (details) {
+      FlutterError.presentError(details);
+      // Print stack for debugging
+      debugPrint(details.exceptionAsString());
+      if (details.stack != null) debugPrint(details.stack.toString());
+    };
+
+    // Now run the app in the same zone
+    runApp(
+      MultiProvider(
+        providers: [
+          // Core services available via Provider
+          Provider<AuthService>.value(value: authService),
+
+          // State management providers
+          ChangeNotifierProvider(
+            create: (_) => AuthProvider(authService: authService),
+          ),
+          ChangeNotifierProvider.value(value: notificationsProvider),
+          ChangeNotifierProvider(
+            create: (_) => LocationProvider(locationService),
+          ),
+          ChangeNotifierProvider(
+            create: (_) => HealthReportProvider(healthReportService),
+          ),
+          ChangeNotifierProvider(create: (_) => MovementLogProvider()),
+        ],
+        child: const MyApp(),
+      ),
+    );
+  }, (error, stack) {
+    // Log uncaught errors
+    debugPrint('Uncaught error: $error');
+    debugPrintStack(stackTrace: stack);
   });
-
-  // Set up error handling
-  FlutterError.onError = (details) {
-    FlutterError.presentError(details);
-    // Log to Firebase Crashlytics later
-  };
-
-  runApp(
-    MultiProvider(
-      providers: [
-        // Core services available via Provider
-        Provider<AuthService>.value(value: authService),
-
-        // State management providers
-        ChangeNotifierProvider(
-          create: (_) => AuthProvider(authService: authService),
-        ),
-        ChangeNotifierProvider.value(value: notificationsProvider),
-        ChangeNotifierProvider(
-          create: (_) => LocationProvider(locationService),
-        ),
-        ChangeNotifierProvider(
-          create: (_) => HealthReportProvider(healthReportService),
-        ),
-        ChangeNotifierProvider(create: (_) => MovementLogProvider()),
-      ],
-      child: const MyApp(),
-    ),
-  );
 }
 
 class MyApp extends StatelessWidget {
@@ -107,11 +131,23 @@ class MyApp extends StatelessWidget {
       routes: {
         '/splash': (context) => const SplashScreen(),
         '/role_selection': (context) => const RoleSelectionPage(),
+        '/login': (context) {
+          final args = ModalRoute.of(context)!.settings.arguments;
+          return LoginRolePage(role: args is UserRole ? args : null);
+        },
+        '/signup': (context) {
+          final args = ModalRoute.of(context)!.settings.arguments;
+          return SignupRolePage(role: args is UserRole ? args : null);
+        },
         '/': (context) =>
             const MyHomePage(title: 'Patient Dashboard'), // Patient Dashboard
         '/patient_dashboard': (context) =>
             const MyHomePage(title: 'Patient Dashboard'),
         '/guardian_dashboard': (context) => const GuardianDashboard(),
+  '/patient_home': (context) => const PatientHome(),
+  '/caregiver_home': (context) => const CaregiverHome(),
+  '/generate_pair': (context) => const GeneratePairCodePage(),
+  '/claim_pair': (context) => const ClaimPairCodePage(),
         '/health_status': (context) => const HealthStatusPage(),
         '/movement_log': (context) => const MovementLogPage(),
         '/manual_control': (context) => ManualControlPage(),

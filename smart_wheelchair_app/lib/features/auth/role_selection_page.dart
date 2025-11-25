@@ -89,10 +89,8 @@ class RoleSelectionPage extends StatelessWidget {
   }
 
   void _onRoleSelected(BuildContext context, UserRole role) {
-    final route = switch (role) {
-      UserRole.patient => '/patient_dashboard',
-      UserRole.guardian => '/guardian_dashboard',
-    };
-    Navigator.pushReplacementNamed(context, route);
+    // Navigate to the login screen for the selected role.
+    // Users can choose to sign up from the login screen.
+    Navigator.pushReplacementNamed(context, '/login', arguments: role);
   }
 }

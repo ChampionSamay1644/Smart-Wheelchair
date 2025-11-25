@@ -7,7 +7,9 @@ enum UserRole {
       case UserRole.patient:
         return 'Patient';
       case UserRole.guardian:
-        return 'Guardian';
+        // Use a user-friendly label 'Caregiver' in the UI while keeping
+        // the internal value 'guardian' for backwards compatibility.
+        return 'Caregiver';
     }
   }
 }
