@@ -19,7 +19,7 @@ class PatientHome extends StatelessWidget {
               if (!context.mounted) return;
               Navigator.pushReplacementNamed(context, '/role_selection');
             },
-          )
+          ),
         ],
       ),
       body: Center(

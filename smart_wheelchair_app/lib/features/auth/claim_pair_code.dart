@@ -27,7 +27,9 @@ class _ClaimPairCodePageState extends State<ClaimPairCodePage> {
     try {
       await PairingService.claimPairCode(_controller.text.trim());
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pairing successful')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Pairing successful')));
       Navigator.pop(context);
     } catch (e) {
       setState(() => _error = e.toString());
@@ -54,12 +56,14 @@ class _ClaimPairCodePageState extends State<ClaimPairCodePage> {
             const SizedBox(height: 12),
             ElevatedButton(
               onPressed: _loading || !isValid ? null : _claim,
-              child: _loading ? const CircularProgressIndicator() : const Text('Claim'),
+              child: _loading
+                  ? const CircularProgressIndicator()
+                  : const Text('Claim'),
             ),
             if (_error != null) ...[
               const SizedBox(height: 12),
               Text(_error!, style: const TextStyle(color: Colors.red)),
-            ]
+            ],
           ],
         ),
       ),

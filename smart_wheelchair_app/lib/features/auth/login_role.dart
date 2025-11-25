@@ -48,7 +48,12 @@ class _LoginRolePageState extends State<LoginRolePage> {
         builder: (ctx) => AlertDialog(
           title: const Text('Error'),
           content: SingleChildScrollView(child: Text('$e\n${st.toString()}')),
-          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Close'),
+            ),
+          ],
         ),
       );
     }
@@ -69,19 +74,25 @@ class _LoginRolePageState extends State<LoginRolePage> {
                 controller: _emailController,
                 decoration: const InputDecoration(labelText: 'Email'),
                 keyboardType: TextInputType.emailAddress,
-                validator: (v) => (v == null || v.isEmpty) ? 'Enter email' : null,
+                validator: (v) =>
+                    (v == null || v.isEmpty) ? 'Enter email' : null,
               ),
               TextFormField(
                 controller: _passwordController,
                 decoration: const InputDecoration(labelText: 'Password'),
                 obscureText: true,
-                validator: (v) => (v == null || v.length < 6) ? '6+ chars' : null,
+                validator: (v) =>
+                    (v == null || v.length < 6) ? '6+ chars' : null,
               ),
               const SizedBox(height: 16),
               ElevatedButton(onPressed: _onLogin, child: const Text('Login')),
               const SizedBox(height: 8),
               TextButton(
-                onPressed: () => Navigator.pushReplacementNamed(context, '/signup', arguments: role),
+                onPressed: () => Navigator.pushReplacementNamed(
+                  context,
+                  '/signup',
+                  arguments: role,
+                ),
                 child: const Text('Create an account'),
               ),
             ],

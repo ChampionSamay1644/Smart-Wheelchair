@@ -57,7 +57,12 @@ class _SignupRolePageState extends State<SignupRolePage> {
         builder: (ctx) => AlertDialog(
           title: const Text('Error'),
           content: SingleChildScrollView(child: Text(text)),
-          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close'))],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Close'),
+            ),
+          ],
         ),
       );
     }
@@ -77,19 +82,22 @@ class _SignupRolePageState extends State<SignupRolePage> {
               TextFormField(
                 controller: _nameController,
                 decoration: const InputDecoration(labelText: 'Full name'),
-                validator: (v) => (v == null || v.isEmpty) ? 'Enter name' : null,
+                validator: (v) =>
+                    (v == null || v.isEmpty) ? 'Enter name' : null,
               ),
               TextFormField(
                 controller: _emailController,
                 decoration: const InputDecoration(labelText: 'Email'),
                 keyboardType: TextInputType.emailAddress,
-                validator: (v) => (v == null || v.isEmpty) ? 'Enter email' : null,
+                validator: (v) =>
+                    (v == null || v.isEmpty) ? 'Enter email' : null,
               ),
               TextFormField(
                 controller: _passwordController,
                 decoration: const InputDecoration(labelText: 'Password'),
                 obscureText: true,
-                validator: (v) => (v == null || v.length < 6) ? '6+ chars' : null,
+                validator: (v) =>
+                    (v == null || v.length < 6) ? '6+ chars' : null,
               ),
               const SizedBox(height: 16),
               ElevatedButton(
@@ -98,7 +106,11 @@ class _SignupRolePageState extends State<SignupRolePage> {
               ),
               const SizedBox(height: 8),
               TextButton(
-                onPressed: () => Navigator.pushReplacementNamed(context, '/login', arguments: role),
+                onPressed: () => Navigator.pushReplacementNamed(
+                  context,
+                  '/login',
+                  arguments: role,
+                ),
                 child: const Text('Already have an account? Login'),
               ),
             ],

@@ -42,67 +42,70 @@ void main() {
   // Run the entire initialization inside the same zone as runApp to avoid
   // the Flutter "Zone mismatch" error. All binding initialization and
   // Firebase initialization must happen inside this zone.
-  runZonedGuarded(() async {
-    WidgetsFlutterBinding.ensureInitialized();
+  runZonedGuarded(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
 
-    // Initialize Firebase core using generated options
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
+      // Initialize Firebase core using generated options
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
 
-    // Initialize FirebaseService (helper for analytics/messaging, if any)
-    // Run initialize in background to avoid blocking app startup and causing frame skips
-    FirebaseService.initialize();
+      // Initialize FirebaseService (helper for analytics/messaging, if any)
+      // Run initialize in background to avoid blocking app startup and causing frame skips
+      FirebaseService.initialize();
 
-    // Initialize core services
-    final authService = AuthService();
-    final locationService = LocationService();
-    final healthReportService = HealthReportService();
+      // Initialize core services
+      final authService = AuthService();
+      final locationService = LocationService();
+      final healthReportService = HealthReportService();
 
-    // Initialize notification system asynchronously after app start
-    final notificationsProvider = NotificationsProvider();
-    final notificationService = NotificationService(notificationsProvider);
-    // Don't block startup - initialize in background
-    notificationService.initialize().catchError((e) {
-      debugPrint('Failed to initialize notifications: $e');
-    });
+      // Initialize notification system asynchronously after app start
+      final notificationsProvider = NotificationsProvider();
+      final notificationService = NotificationService(notificationsProvider);
+      // Don't block startup - initialize in background
+      notificationService.initialize().catchError((e) {
+        debugPrint('Failed to initialize notifications: $e');
+      });
 
-    // Set up error handling to capture uncaught Flutter errors and print stack traces
-    FlutterError.onError = (details) {
-      FlutterError.presentError(details);
-      // Print stack for debugging
-      debugPrint(details.exceptionAsString());
-      if (details.stack != null) debugPrint(details.stack.toString());
-    };
+      // Set up error handling to capture uncaught Flutter errors and print stack traces
+      FlutterError.onError = (details) {
+        FlutterError.presentError(details);
+        // Print stack for debugging
+        debugPrint(details.exceptionAsString());
+        if (details.stack != null) debugPrint(details.stack.toString());
+      };
 
-    // Now run the app in the same zone
-    runApp(
-      MultiProvider(
-        providers: [
-          // Core services available via Provider
-          Provider<AuthService>.value(value: authService),
+      // Now run the app in the same zone
+      runApp(
+        MultiProvider(
+          providers: [
+            // Core services available via Provider
+            Provider<AuthService>.value(value: authService),
 
-          // State management providers
-          ChangeNotifierProvider(
-            create: (_) => AuthProvider(authService: authService),
-          ),
-          ChangeNotifierProvider.value(value: notificationsProvider),
-          ChangeNotifierProvider(
-            create: (_) => LocationProvider(locationService),
-          ),
-          ChangeNotifierProvider(
-            create: (_) => HealthReportProvider(healthReportService),
-          ),
-          ChangeNotifierProvider(create: (_) => MovementLogProvider()),
-        ],
-        child: const MyApp(),
-      ),
-    );
-  }, (error, stack) {
-    // Log uncaught errors
-    debugPrint('Uncaught error: $error');
-    debugPrintStack(stackTrace: stack);
-  });
+            // State management providers
+            ChangeNotifierProvider(
+              create: (_) => AuthProvider(authService: authService),
+            ),
+            ChangeNotifierProvider.value(value: notificationsProvider),
+            ChangeNotifierProvider(
+              create: (_) => LocationProvider(locationService),
+            ),
+            ChangeNotifierProvider(
+              create: (_) => HealthReportProvider(healthReportService),
+            ),
+            ChangeNotifierProvider(create: (_) => MovementLogProvider()),
+          ],
+          child: const MyApp(),
+        ),
+      );
+    },
+    (error, stack) {
+      // Log uncaught errors
+      debugPrint('Uncaught error: $error');
+      debugPrintStack(stackTrace: stack);
+    },
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -144,10 +147,10 @@ class MyApp extends StatelessWidget {
         '/patient_dashboard': (context) =>
             const MyHomePage(title: 'Patient Dashboard'),
         '/guardian_dashboard': (context) => const GuardianDashboard(),
-  '/patient_home': (context) => const PatientHome(),
-  '/caregiver_home': (context) => const CaregiverHome(),
-  '/generate_pair': (context) => const GeneratePairCodePage(),
-  '/claim_pair': (context) => const ClaimPairCodePage(),
+        '/patient_home': (context) => const PatientHome(),
+        '/caregiver_home': (context) => const CaregiverHome(),
+        '/generate_pair': (context) => const GeneratePairCodePage(),
+        '/claim_pair': (context) => const ClaimPairCodePage(),
         '/health_status': (context) => const HealthStatusPage(),
         '/movement_log': (context) => const MovementLogPage(),
         '/manual_control': (context) => ManualControlPage(),

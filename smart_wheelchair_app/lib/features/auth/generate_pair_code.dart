@@ -40,19 +40,29 @@ class _GeneratePairCodePageState extends State<GeneratePairCodePage> {
           children: [
             ElevatedButton(
               onPressed: _loading ? null : _generate,
-              child: _loading ? const CircularProgressIndicator() : const Text('Generate Code'),
+              child: _loading
+                  ? const CircularProgressIndicator()
+                  : const Text('Generate Code'),
             ),
             const SizedBox(height: 24),
             if (_code != null)
               Column(
                 children: [
-                  SelectableText('Code: $_code', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  SelectableText(
+                    'Code: $_code',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                   const SizedBox(height: 8),
                   ElevatedButton(
                     onPressed: () {
                       if (_code != null) {
                         Clipboard.setData(ClipboardData(text: _code!));
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Copied to clipboard')),
+                        );
                       }
                     },
                     child: const Text('Copy Code'),
