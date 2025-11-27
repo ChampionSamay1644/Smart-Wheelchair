@@ -1,6 +1,7 @@
 // ignore_for_file: use_key_in_widget_constructors, avoid_print
 
 import 'package:flutter/material.dart';
+import 'voice_enrollment_page.dart';
 
 class SettingsPage extends StatelessWidget {
   @override
@@ -37,20 +38,23 @@ class SettingsPage extends StatelessWidget {
           _buildSection('User Preferences', [
             _buildSettingItem(
               context,
+              'Voice Profile',
+              Icons.record_voice_over,
+              'Enroll your voice for authentication',
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => VoiceEnrollmentPage()),
+                );
+              },
+            ),
+            _buildSettingItem(
+              context,
               'Emergency Contacts',
               Icons.emergency,
               'Add or edit emergency contacts',
               onTap: () {
                 print('Emergency contacts tapped');
-              },
-            ),
-            _buildSettingItem(
-              context,
-              'Voice Commands',
-              Icons.record_voice_over,
-              'Customize voice commands',
-              onTap: () {
-                print('Voice commands settings tapped');
               },
             ),
           ]),

@@ -1,0 +1,63 @@
+# Multi-architecture Dockerfile for Smart Wheelchair WebSocket Server
+# Supports: linux/amd64 (x86_64), linux/arm64, linux/arm/v7 (Raspberry Pi)
+# Includes FULL ML stack for voice command processing
+
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies for audio processing and ML
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libsndfile1 \
+    libportaudio2 \
+    portaudio19-dev \
+    ffmpeg \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR /app
+
+# Copy and install requirements FIRST (better layer caching)
+# Using CPU-only PyTorch for faster build and smaller image
+COPY requirements-docker.txt .
+RUN pip install --no-cache-dir -r requirements-docker.txt
+
+# Copy wheelchair control system
+COPY wheelchair_control.py .
+COPY wheelchair_control_wrapper.py .
+COPY multi_voice_tts.py .
+COPY system.py .
+
+# Copy WebSocket server
+COPY websocket_server.py .
+
+# Copy models directory (contains trained models)
+COPY optimized_models/ /app/models/
+
+# Copy voice database
+COPY voice_db_embeddings/ /app/voice_db_embeddings/
+COPY voice_db_processed/ /app/voice_db_processed/
+
+# Create temp directory for audio files
+RUN mkdir -p /app/temp_ws_audio
+
+# ⚠️  SAFETY: Default to safe mode (no motor actuation)
+ENV ENABLE_ACTUATION=false \
+    ACTUATION_CONFIRM=false \
+    WS_HOST=0.0.0.0 \
+    WS_PORT=8765
+
+# Expose WebSocket port
+EXPOSE 8765
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import socket; s=socket.socket(); s.connect(('localhost', 8765)); s.close()"
+
+# Run the server
+CMD ["python", "websocket_server.py"]

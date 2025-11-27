@@ -1,0 +1,44 @@
+# Docker Requirements - Smart Wheelchair ML Stack
+# Optimized for both x86_64 (dev) and ARM (Raspberry Pi)
+
+# Core WebSocket
+websockets>=12.0
+
+# Audio Processing
+librosa>=0.9.0
+noisereduce>=2.0.0
+soundfile>=0.10.0
+pydub>=0.25.1
+
+# ML/AI Core
+numpy>=1.20.0
+scipy>=1.7.0
+scikit-learn>=1.0.0
+
+# PyTorch (CPU-only for smaller image - MUST use CPU version to avoid 900MB+ CUDA downloads)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Transformers & NLP
+transformers>=4.28.0
+sentencepiece>=0.1.97
+sacremoses>=0.0.53
+
+# Speech Recognition
+SpeechRecognition>=3.8.1
+
+# ONNX Runtime
+onnx>=1.12.0
+onnxruntime>=1.12.0
+
+# TTS
+piper-tts>=1.2.0
+
+# Voice Verification
+resemblyzer>=0.1.1
+
+# Utilities
+python-dotenv>=0.19.0
+psutil>=5.9.0
+protobuf>=3.20.0

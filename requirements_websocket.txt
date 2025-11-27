@@ -1,0 +1,2 @@
+# WebSocket Server Dependencies
+websockets>=12.0

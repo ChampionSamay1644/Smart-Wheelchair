@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  wheelchair-websocket:
+    build:
+      context: .
+      dockerfile: Dockerfile.websocket
+    container_name: wheelchair
+    ports:
+      - "8765:8765"
+    volumes:
+      # Persistent storage for audio files (optional)
+      - ./temp_ws_audio:/app/temp_ws_audio
+    environment:
+      # ⚠️  SAFETY CONFIGURATION ⚠️
+      # By default, motors are DISABLED (simulation only)
+      # To enable motor actuation, uncomment BOTH lines below:
+      # - ENABLE_ACTUATION=true
+      # - ACTUATION_CONFIRM=true
+      
+      # REQUIRED: Set your API secret for authentication
+      # Generate a secure random string, e.g.: openssl rand -hex 32
+      - API_SECRET=${API_SECRET:-changeme_generate_secure_token}
+      
+      # Server configuration
+      - WS_HOST=0.0.0.0
+      - WS_PORT=8765
+    restart: unless-stopped
+    networks:
+      - wheelchair-network
+
+networks:
+  wheelchair-network:
+    driver: bridge
+
+# For production deployment with TLS:
+# 1. Add nginx reverse proxy service with SSL certificates
+# 2. Configure wss:// endpoint
+# 3. Use proper secrets management (Docker secrets, env files with restricted permissions)
+# 4. Add rate limiting and DDoS protection
