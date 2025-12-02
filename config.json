@@ -1,0 +1,23 @@
+{
+  "raspberry_pi": {
+    "base_path": "/home/pi/Code",
+    "ip_address": "192.168.0.103",
+    "websocket_port": 8765,
+    "gpio_pins": {
+      "motor_left_in1": 17,
+      "motor_left_in2": 27,
+      "motor_right_in1": 22,
+      "motor_right_in2": 23
+    }
+  },
+  "android_app": {
+    "websocket_url": "ws://192.168.1.100:8765",
+    "recording_sample_rate": 16000,
+    "chunk_duration_ms": 100
+  },
+  "voice_processing": {
+    "sample_rate": 16000,
+    "record_duration": 5,
+    "similarity_threshold": 0.60
+  }
+}

@@ -24,6 +24,7 @@ pydub>=0.25.1  # For audio format conversion (MP3 -> WAV)
 python-dotenv>=0.19.0
 resemblyzer>=0.1.0  # For voice verification (lightweight 2MB model)
 resemblyzer>=0.1.1
+speechbrain>=0.5.14  # ECAPA-TDNN speaker recognition
 sacremoses>=0.0.53  # Required for M2M100 tokenizer
 sacremoses>=0.0.53  # Required for translation
 scikit-learn>=1.0.0  # For additional audio processing features

@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:smart_wheelchair_app/features/outdoor_navigation/outdoor_navigation_page.dart';
 import 'package:provider/provider.dart';
 import 'core/providers/auth_provider.dart';
+import 'core/providers/connection_provider.dart';
+import 'widgets/connection_dialog.dart';
 import 'features/auth/splash_screen.dart';
 import 'features/auth/role_selection_page.dart';
 import 'features/dashboard/doctor_dashboard.dart';
@@ -19,7 +21,10 @@ import 'voice_control_page.dart';
 void main() {
   runApp(
     MultiProvider(
-      providers: [ChangeNotifierProvider(create: (_) => AuthProvider())],
+      providers: [
+        ChangeNotifierProvider(create: (_) => AuthProvider()),
+        ChangeNotifierProvider(create: (_) => ConnectionProvider()),
+      ],
       child: const MyApp(),
     ),
   );
@@ -88,17 +93,45 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
+  bool _hasPromptedConnectionDialog = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final connection = Provider.of<ConnectionProvider>(context);
+    if (_hasPromptedConnectionDialog) {
+      return;
+    }
+    if (!connection.isInitialized) {
+      return;
+    }
+    if (connection.hasValidConfig) {
+      _hasPromptedConnectionDialog = true;
+      return;
+    }
+
+    _hasPromptedConnectionDialog = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ConnectionDialog.show(context, barrierDismissible: false);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).primaryColor,
-        title: const Text(
-          'SmartNav',
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: 24,
+        title: const FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            'Smart Wheelchair',
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 24,
+            ),
           ),
         ),
         elevation: 4,
@@ -114,6 +147,8 @@ class _MyHomePageState extends State<MyHomePage> {
               ).showSnackBar(const SnackBar(content: Text('Help requested!')));
             },
           ),
+          const _ConnectionStatusAction(),
+          const _BluetoothStatusPlaceholder(),
           IconButton(
             icon: const Icon(Icons.map, color: Colors.white),
             onPressed: () {
@@ -322,6 +357,66 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ConnectionStatusAction extends StatelessWidget {
+  const _ConnectionStatusAction();
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<ConnectionProvider>(
+      builder: (context, provider, _) {
+        final isConnecting = provider.isConnecting;
+        final isConnected = provider.isConnected;
+        final icon = isConnected
+            ? Icons.wifi
+            : isConnecting
+            ? Icons.wifi_tethering
+            : Icons.wifi_off;
+        final tooltip = isConnected
+            ? 'Connected to ${provider.ipAddress}:${provider.port}'
+            : isConnecting
+            ? 'Connecting to wheelchair...'
+            : 'Tap to connect to wheelchair';
+
+        return IconButton(
+          icon: Icon(
+            icon,
+            color: isConnected
+                ? Colors.lightGreenAccent
+                : isConnecting
+                ? Colors.orangeAccent
+                : Colors.white,
+          ),
+          tooltip: tooltip,
+          onPressed: () => ConnectionDialog.show(context),
+        );
+      },
+    );
+  }
+}
+
+class _BluetoothStatusPlaceholder extends StatelessWidget {
+  const _BluetoothStatusPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: const Icon(
+        Icons.bluetooth,
+        color: Colors.white70,
+      ),
+      tooltip: 'Bluetooth (coming soon)',
+      onPressed: () {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Bluetooth integration is coming soon.'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      },
     );
   }
 }

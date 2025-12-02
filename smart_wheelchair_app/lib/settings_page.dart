@@ -2,6 +2,8 @@
 
 import 'package:flutter/material.dart';
 
+import 'widgets/connection_dialog.dart';
+
 class SettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -51,6 +53,7 @@ class SettingsPage extends StatelessWidget {
               'Customize voice commands',
               onTap: () {
                 print('Voice commands settings tapped');
+                Navigator.pushNamed(context, '/voice_control');
               },
             ),
           ]),
@@ -71,7 +74,7 @@ class SettingsPage extends StatelessWidget {
               Icons.bluetooth,
               'Check device connectivity',
               onTap: () {
-                print('Connection status tapped');
+                ConnectionDialog.show(context);
               },
             ),
             _buildSettingItem(

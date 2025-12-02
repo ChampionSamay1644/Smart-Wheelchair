@@ -4,6 +4,7 @@ import math
 import time
 import urllib.request
 import subprocess
+import platform
 from pathlib import Path
 from datetime import datetime, timezone # MODIFIED
 import requests  # --- NEW --- For Hugging Face API calls
@@ -965,6 +966,57 @@ def load_local_stt_pipeline(force_autodetect=False):
     global _stt_pipe
     if _stt_pipe is not None:
         return _stt_pipe
+
+    prefers_lightweight_backend = platform.machine().lower().startswith(("arm", "aarch"))
+
+    if prefers_lightweight_backend and not force_autodetect:
+        try:
+            from faster_whisper import WhisperModel
+
+            class _FasterWhisperPipeline:
+                def __init__(self, model: WhisperModel):
+                    self._model = model
+
+                def __call__(self, audio_array, generate_kwargs=None):
+                    if audio_array is None or len(audio_array) == 0:
+                        return {"text": ""}
+
+                    language = None
+                    task = "transcribe"
+                    if generate_kwargs:
+                        language = generate_kwargs.get("language")
+                        task = generate_kwargs.get("task", task)
+
+                    segments, info = self._model.transcribe(
+                        audio_array,
+                        language=language,
+                        task=task,
+                        beam_size=1,
+                    )
+
+                    text = " ".join(segment.text.strip() for segment in segments).strip()
+                    return {"text": text}
+
+            fw_cache_dir = OPTIMIZED_DIR / "faster-whisper"
+            fw_cache_dir.mkdir(parents=True, exist_ok=True)
+
+            fw_model = WhisperModel(
+                "tiny",
+                device="cpu",
+                compute_type="int8",
+                download_root=str(fw_cache_dir),
+            )
+
+            _stt_pipe = _FasterWhisperPipeline(fw_model)
+            print("Loaded Whisper tiny via faster-whisper backend (int8)")
+            return _stt_pipe
+        except ImportError:
+            print(
+                "faster-whisper not installed; install with 'pip install faster-whisper' "
+                "for optimal performance on Raspberry Pi."
+            )
+        except Exception as e:
+            print(f"Failed to initialize faster-whisper backend: {e}")
         
     try:
         print(f"Loading Whisper tiny model directly without quantization...")
@@ -972,31 +1024,52 @@ def load_local_stt_pipeline(force_autodetect=False):
         # Get the actual model directory path
         model_dir = OPTIMIZED_DIR / "models--openai--whisper-tiny"
         
-        if not model_dir.exists() or not (model_dir / "model.safetensors").exists():
-            print(f"Whisper tiny model not found at {model_dir}")
-            print("Please run setup_whisper_tiny.py first to download the model")
-            return None
-            
-        # Load processor and model directly using the downloaded model
-        try:
-            # First try loading with the model directory path
-            processor = AutoProcessor.from_pretrained(
-                str(model_dir),
-                local_files_only=True
-            )
-            
-            model = AutoModelForSpeechSeq2Seq.from_pretrained(
-                str(model_dir),
-                dtype=torch.float32,  # Use dtype instead of torch_dtype
-                local_files_only=True
-            )
-            
-            model.eval()
-            print("Successfully loaded Whisper tiny model from local directory")
-        except Exception as e:
-            print(f"Failed to load model or processor locally from {model_dir}: {e}")
-            print("Please run setup_whisper_tiny.py to download all required model files")
-            return None
+        processor = None
+        model = None
+
+        if model_dir.exists() and (model_dir / "model.safetensors").exists():
+            try:
+                processor = AutoProcessor.from_pretrained(
+                    str(model_dir),
+                    local_files_only=True
+                )
+
+                model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                    str(model_dir),
+                    torch_dtype=torch.float32,
+                    local_files_only=True
+                )
+
+                model.eval()
+                print("Successfully loaded Whisper tiny model from local directory")
+            except Exception as local_error:
+                print(f"Failed to load Whisper tiny from {model_dir}: {local_error}")
+                processor = None
+                model = None
+
+        if processor is None or model is None:
+            try:
+                print("Whisper tiny model not found locally, downloading from Hugging Face (one-time operation)...")
+                processor = AutoProcessor.from_pretrained(
+                    "openai/whisper-tiny",
+                    cache_dir=str(OPTIMIZED_DIR),
+                    local_files_only=False
+                )
+
+                model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                    "openai/whisper-tiny",
+                    cache_dir=str(OPTIMIZED_DIR),
+                    torch_dtype=torch.float32,
+                    local_files_only=False
+                )
+
+                model.eval()
+                print("Successfully downloaded Whisper tiny model")
+                model_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as download_error:
+                print(f"Failed to download Whisper tiny model: {download_error}")
+                print("Please ensure the device has internet access or pre-download the model using setup_whisper_tiny.py")
+                return None
             
         # Create pipeline using the model directly (no quantization needed for tiny model)
         stt_pipe = pipeline(

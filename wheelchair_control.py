@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pyright: reportMissingImports=false
 """
 Smart Wheelchair Control System with Multilingual Voice Commands
 
@@ -18,18 +19,39 @@ Date: October 2, 2025
 """
 
 import os
+# Force CPU execution for ONNX Runtime before any heavy libraries load to avoid GPU discovery warnings
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
+os.environ.setdefault("ROCR_VISIBLE_DEVICES", "")
+os.environ.setdefault("ORT_FORCE_CPU", "1")
+os.environ.setdefault("ORT_DISABLE_GPU_EXECUTION_PROVIDER", "1")
+
 import sys
 import time
+import platform
+import importlib
 import numpy as np
 import sounddevice as sd
 import scipy.io.wavfile as wav
 from pathlib import Path
 import torch
+try:
+    import torchaudio  # type: ignore
+    if not hasattr(torchaudio, "list_audio_backends"):
+        def _list_audio_backends() -> list:
+            return []
+        torchaudio.list_audio_backends = _list_audio_backends  # type: ignore[attr-defined]
+except Exception:
+    torchaudio = None  # type: ignore
 import difflib
 import json
 import uuid
 import datetime
-from typing import Dict, List, Tuple, Optional, Union, Any
+from collections import defaultdict
+from functools import lru_cache
+from typing import Dict, List, Tuple, Optional, Union, Any, TYPE_CHECKING
+
+import requests
+from dotenv import load_dotenv
 
 try:
     import soundfile as sf
@@ -43,33 +65,50 @@ except ImportError:
     print("Warning: librosa not installed. Install with: pip install librosa")
     librosa = None
 
-# Import shared components from the system module
-from system import (
-    preprocess_and_noise_reduce,
-    transcribe_audio,
-    query_llm,
-    TEMP_DIR,
-    TTS_OUTPUT_DIR,
-    load_api_key,
-    cosine_similarity,
-    record_audio,
-    save_float_to_wav,
-    _load_audio_16k,
-    load_local_stt_pipeline,
-    WHISPER_MODEL_ID,
-    WHISPER_MODEL_DIR
-)
+try:
+    from groq import Groq
+    GROQ_AVAILABLE = True
+except ImportError:
+    GROQ_AVAILABLE = False
+    print("Warning: Groq package not found. Install with: pip install groq")
+
+try:
+    import noisereduce as nr
+except ImportError:
+    nr = None
+
+try:
+    from transformers import (
+        AutoProcessor,
+        AutoModelForSpeechSeq2Seq,
+        pipeline,
+        AutoModelForCausalLM,
+        AutoTokenizer,
+    )
+except ImportError:
+    print("Missing dependency: transformers. Install with: pip install transformers")
+    sys.exit(1)
 
 # Import the new multi-voice TTS module
-from multi_voice_tts import synthesize_speech, play_audio
+from multi_voice_tts import synthesize_speech
 
 # Import voice recognition components
 try:
-    from resemblyzer import VoiceEncoder, preprocess_wav
-    from resemblyzer.audio import sampling_rate as RS_SAMPLING_RATE
+    from speechbrain.pretrained import SpeakerRecognition
+    SPEECHBRAIN_AVAILABLE = True
 except ImportError:
-    print("Missing dependency: resemblyzer. Install with: pip install resemblyzer")
-    sys.exit(1)
+    SPEECHBRAIN_AVAILABLE = False
+    print("Missing dependency: speechbrain. Install with: pip install speechbrain")
+
+RS_SAMPLING_RATE = 16000
+
+if TYPE_CHECKING:
+    from faster_whisper import WhisperModel as _FWWhisperModel  # type: ignore[import]
+
+# =============================================================================
+# CORE CONFIGURATION (SELF-CONTAINED FROM system.py)
+# =============================================================================
+
 
 # =============================================================================
 # VOICE ACTIVITY DETECTION - Consolidated from voice_activity.py
@@ -79,11 +118,6 @@ def detect_silence(audio, sample_rate, threshold=0.015, min_duration=0.5):
     """
     Detect if audio contains mostly silence or background noise.
     
-    Args:
-        audio: Audio data as numpy array
-        sample_rate: Sample rate in Hz
-        threshold: RMS threshold for considering audio as non-silent
-        min_duration: Minimum duration of non-silent audio needed (seconds)
         
     Returns:
         (is_silent, speech_percentage): 
@@ -172,11 +206,951 @@ def record_with_vad(duration, sample_rate, device=None, max_attempts=3, prompt_p
     return None, 0
 
 # Standard prompt phrases for voice enrollment
+VOICE_DB_PROCESSED_DIR = Path("./voice_db_processed")
+VOICE_DB_EMBEDDINGS_DIR = Path("./voice_db_embeddings")
+OPTIMIZED_DIR = Path("./optimized_models")
+MODELS_DIR = Path("./models")
+TTS_OUTPUT_DIR = Path("./tts_outputs")
+TEMP_DIR = Path("./temp")
+VOICE_MODEL_SEARCH_DIRS = [MODELS_DIR, OPTIMIZED_DIR]
+
+WHISPER_MODEL_ID = "openai/whisper-tiny"
+WHISPER_MODEL_DIR = OPTIMIZED_DIR / "models--openai--whisper-tiny"
+
+HF_API_TOKEN: Optional[str] = None
+LLM_MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
+LLM_API_URL = f"https://api-inference.huggingface.co/models/{LLM_MODEL_ID}"
+LLM_HEADERS: Dict[str, str] = {}
+LLM_FALLBACK_MODELS = [
+    "microsoft/Phi-3-mini-4k-instruct",
+    "HuggingFaceH4/zephyr-7b-beta",
+    "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+]
+
+GROQ_API_KEY: Optional[str] = None
+USE_GROQ = True
+GROQ_MODEL = "openai/gpt-oss-20b"
+GROQ_CLIENT: Optional[Any] = None
+
+ENABLE_LOCAL_LLM = False
+LOCAL_LLM_MODEL_ID = "HuggingFaceH4/zephyr-7b-beta"
+_local_llm_pipe: Optional[Any] = None
+
+USE_HF_ROUTER = False
+HF_ROUTER_TOKEN: Optional[str] = None
+ROUTER_API_BASE = "https://router.huggingface.co/v1"
+ROUTER_MODEL_ID = "HuggingFaceH4/zephyr-7b-beta:featherless-ai"
+ROUTER_MODEL_FALLBACKS = [
+    "Qwen/Qwen2.5-7B-Instruct:together",
+]
+
+SYSTEM_PROMPT = (
+    "Your name is Cruzer and you are a chatbot on a Smart IOT Enabled wheelchair. "
+    "Reply to messages in very simple and easy to understand language so that anyone can understand and interpret your responses. "
+    "Be short but precise. Avoid using special formatting characters like asterisks or hashtags."
+)
+
+SAMPLE_RATE = RS_SAMPLING_RATE
+RECORD_DURATION = 2
+SIMILARITY_THRESHOLD = 0.50
+SPEAKER_NOISE_REDUCTION_BLEND = 0.10  # Portion of denoised signal to mix into embeddings (0.0 disables)
+SPEAKER_EMBED_SEGMENT_SECONDS = 0.95  # Duration per chunk when averaging embeddings
+SPEAKER_EMBED_OVERLAP = 0.45  # Fractional overlap between chunks for embeddings
+STT_NOISE_REDUCTION_BLEND = 0.18  # Blend factor for light denoising before Whisper
+SPEAKER_SEGMENT_RMS_RATIO = 0.18  # Minimum % of overall RMS a segment must have to be kept
+SPEAKER_SEGMENT_RMS_FLOOR = 0.007  # Absolute RMS floor for segment inclusion
+SPEAKER_VARIANT_SUPPORT_WINDOW = 0.035  # Score gap within which sibling embeddings reinforce the match
+SPEAKER_VARIANT_SUPPORT_STEP = 0.015  # Bonus per additional supporting embedding beyond the strongest
+SPEAKER_VARIANT_SUPPORT_MAX = 0.045  # Cap on cumulative bonus from the same speaker's variants
+SPEAKER_MIN_SCORE_GAP = 0.06  # Minimum lead over runner-up to accept authentication
+SPEAKER_SCORE_GAIN = 1.18  # Multiplicative boost applied to raw similarity before bonuses
+SPEAKER_SCORE_OFFSET = 0.030  # Additive boost applied to raw similarity before bonuses
+SPEAKER_SCORE_AVG_WEIGHT = 0.35  # Weight applied to average variant similarity during calibration
+SPEAKER_SCORE_AVG_BIAS = 0.020  # Bias added when blending average support into the similarity
+SPEAKER_SOLO_THRESHOLD_RELAX = 0.10  # Threshold relaxation when only one speaker is enrolled
+
+_stt_pipe: Optional[Any] = None
+_speaker_recognizer: Optional[Any] = None
+
 ENROLLMENT_PHRASES = [
     "My voice is my password, verify my identity",
     "मेरी आवाज मेरा पासवर्ड है, मेरी पहचान सत्यापित करें",
     "माझा आवाज माझा पासवर्ड आहे, माझी ओळख सत्यापित करा"
 ]
+
+# =============================================================================
+# CORE UTILITIES (PORTED FROM system.py)
+# =============================================================================
+
+def record_audio(seconds, sr):
+    """Capture microphone audio using sounddevice."""
+    print(f"Recording {seconds} seconds...")
+    rec = sd.rec(int(seconds * sr), samplerate=sr, channels=1, dtype="int16")
+    sd.wait()
+    return rec.squeeze()
+
+
+def save_float_to_wav(float_audio, path, sr=SAMPLE_RATE):
+    """Persist float32 audio to WAV file with 16-bit PCM encoding."""
+    wav.write(path, sr, (np.clip(float_audio, -1.0, 1.0) * 32767).astype(np.int16))
+
+
+def cosine_similarity(a, b):
+    """Compute cosine similarity between two embedding vectors."""
+    a_norm = a / (np.linalg.norm(a) + 1e-8)
+    b_norm = b / (np.linalg.norm(b) + 1e-8)
+    return float(np.dot(a_norm, b_norm))
+
+
+FAST_TRANSCRIPTION_ENABLED = True  # Skip heavy denoising to speed up Pi inference
+
+# Common filler words that do not change intent but confuse command matching
+COMMAND_FILLER_WORDS = {
+    "please",
+    "hey",
+    "hello",
+    "hi",
+    "wheelchair",
+    "buddy",
+    "samay",
+    "champion",
+    "smart",
+    "chair",
+    "chairman",
+    "ok",
+    "okay",
+    "the",
+    "a",
+    "to",
+    "let",
+    "lets",
+    "just",
+    "now",
+    "again",
+    "pleasee",
+    "plz",
+    "kindly",
+    "could",
+    "would",
+    "can",
+    "you",
+    "me",
+    "my",
+    "for",
+    "ya",
+    "yo",
+    "listen",
+}
+
+# Short phrases that map cleanly onto canonical commands
+COMMAND_PHRASE_REPLACEMENTS = {
+    "turn left": "left",
+    "turn to the left": "left",
+    "rotate left": "left",
+    "spin left": "left",
+    "circle left": "left",
+    "veer left": "left",
+    "turn right": "right",
+    "turn to the right": "right",
+    "rotate right": "right",
+    "spin right": "right",
+    "veer right": "right",
+    "circle right": "right",
+    "go forward": "forward",
+    "move forward": "forward",
+    "go straight": "forward",
+    "move straight": "forward",
+    "go ahead": "forward",
+    "come back": "backward",
+    "go back": "backward",
+    "move back": "backward",
+    "reverse back": "backward",
+    "stop now": "stop",
+    "please stop": "stop",
+    "emergency stop": "stop",
+    "start moving": "start",
+    "begin moving": "start",
+    "let's go": "forward",
+}
+
+
+def _normalize_command_tokens(words: List[str]) -> List[str]:
+    """Remove filler words that Whisper often adds around the core command."""
+    return [word for word in words if word and word not in COMMAND_FILLER_WORDS]
+
+
+def _apply_phrase_replacements(text: str) -> Optional[Tuple[str, float]]:
+    """Return direct command match if the text contains any canonical phrase."""
+    lowered = text.lower()
+    for phrase, command in COMMAND_PHRASE_REPLACEMENTS.items():
+        if phrase in lowered:
+            # Confidence bumped for explicit phrases
+            base_conf = 0.92 if command in {"left", "right"} else 0.88
+            return command, base_conf
+    return None
+
+
+def _normalize_audio_level(audio: np.ndarray) -> np.ndarray:
+    """Normalize audio to a stable RMS for faster Whisper inference."""
+    if audio.size == 0:
+        return audio.astype(np.float32)
+    peak = np.max(np.abs(audio))
+    if peak > 0:
+        audio = audio / peak
+    return audio.astype(np.float32)
+
+
+def _normalize_vector(vec: np.ndarray) -> np.ndarray:
+    """Return a unit-length version of the provided vector."""
+    vec = np.asarray(vec, dtype=np.float32).reshape(-1)
+    norm = float(np.linalg.norm(vec))
+    if norm < 1e-8:
+        return vec
+    return (vec / norm).astype(np.float32)
+
+
+def _normalize_embedding_stack(stack: np.ndarray) -> np.ndarray:
+    """Normalize each row vector in a matrix of embeddings."""
+    if stack is None or stack.size == 0:
+        return np.empty((0, 0), dtype=np.float32)
+    stack = stack.astype(np.float32)
+    norms = np.linalg.norm(stack, axis=1, keepdims=True) + 1e-8
+    return stack / norms
+
+
+def ensure_minimum_duration(audio: np.ndarray, sample_rate: int, target_seconds: float = 1.2) -> np.ndarray:
+    """Pad audio with reflection so short utterances meet minimum duration."""
+    if audio is None:
+        return np.zeros(int(sample_rate * target_seconds), dtype=np.float32)
+    audio = audio.astype(np.float32)
+    min_samples = int(sample_rate * target_seconds)
+    if audio.size >= min_samples or min_samples <= 0:
+        return audio
+    pad_total = min_samples - audio.size
+    left = pad_total // 2
+    right = pad_total - left
+    if audio.size == 0:
+        return np.zeros(min_samples, dtype=np.float32)
+    return np.pad(audio, (left, right), mode="reflect")
+
+
+def fast_noise_gate(audio: np.ndarray, sample_rate: int, *, floor_percentile: float = 15.0, gate_strength: float = 1.6, release_ms: float = 80.0) -> np.ndarray:
+    """Lightweight noise gate to suppress stationary background hum."""
+    if audio is None or audio.size == 0:
+        return np.zeros_like(audio, dtype=np.float32)
+
+    audio = audio.astype(np.float32)
+    amplitude = np.abs(audio)
+    noise_floor = float(np.percentile(amplitude, max(0.0, min(100.0, floor_percentile))))
+
+    if noise_floor <= 0:
+        return audio
+
+    threshold = noise_floor * max(1.0, gate_strength)
+    voice_mask = amplitude >= threshold
+
+    try:
+        from scipy.ndimage import uniform_filter1d
+
+        window = max(1, int(sample_rate * (release_ms / 1000.0)))
+        smoothed = uniform_filter1d(voice_mask.astype(np.float32), size=window)
+    except Exception:
+        window = max(1, int(sample_rate * (release_ms / 1000.0)))
+        kernel = np.ones(window, dtype=np.float32) / float(window)
+        smoothed = np.convolve(voice_mask.astype(np.float32), kernel, mode="same")
+
+    gain_floor = 0.18
+    gain = gain_floor + (1.0 - gain_floor) * smoothed
+    gated = audio * gain
+    return gated.astype(np.float32)
+
+
+def apply_subtle_noise_reduction(audio: np.ndarray, sample_rate: int, blend: float) -> np.ndarray:
+    """Blend a lightly denoised signal with the original to stabilize embeddings."""
+    if audio is None or audio.size == 0:
+        return np.zeros_like(audio, dtype=np.float32)
+
+    if blend <= 0.0:
+        return audio.astype(np.float32)
+
+    base = audio.astype(np.float32)
+    processed = base
+
+    try:
+        from scipy import signal
+
+        hp = signal.butter(1, 70, "hp", fs=sample_rate, output="sos")
+        lp = signal.butter(1, 3800, "lp", fs=sample_rate, output="sos")
+        filtered = signal.sosfilt(hp, base)
+        filtered = signal.sosfilt(lp, filtered)
+        processed = filtered.astype(np.float32)
+    except Exception:
+        processed = base
+
+    if nr is not None:
+        prop = float(np.clip(blend, 0.05, 0.9))
+        try:
+            reduced = nr.reduce_noise(y=base, sr=sample_rate, prop_decrease=prop, stationary=False)
+            processed = (0.6 * processed + 0.4 * reduced.astype(np.float32))
+        except Exception:
+            pass
+
+    mix = float(np.clip(blend, 0.0, 1.0))
+    mixed = (1.0 - mix) * base + mix * processed
+    return mixed.astype(np.float32)
+
+
+def trim_audio_to_speech(
+    audio: np.ndarray,
+    sample_rate: int,
+    *,
+    threshold_ratio: float = 0.2,
+    min_threshold: float = 0.006,
+    pad_ms: float = 120.0,
+) -> np.ndarray:
+    """Remove leading/trailing silence while keeping a short safety margin."""
+    if audio.size == 0 or sample_rate <= 0:
+        return audio.astype(np.float32)
+
+    if audio.dtype != np.float32:
+        audio = audio.astype(np.float32)
+
+    pad = int(sample_rate * (pad_ms / 1000.0))
+    window = max(1, int(sample_rate * 0.02))
+    kernel = np.ones(window, dtype=np.float32) / float(window)
+    smoothed = np.convolve(np.abs(audio), kernel, mode="same")
+
+    dynamic_thresh = max(
+        min_threshold,
+        float(np.percentile(smoothed, 92) * threshold_ratio),
+    )
+
+    speech_mask = smoothed >= dynamic_thresh
+    if not np.any(speech_mask):
+        return audio
+
+    first = int(np.argmax(speech_mask))
+    last = int(len(speech_mask) - np.argmax(speech_mask[::-1]) - 1)
+    start = max(0, first - pad)
+    end = min(len(audio), last + pad + 1)
+    trimmed = audio[start:end]
+
+    if trimmed.size == 0:
+        return audio
+
+    return trimmed.astype(np.float32)
+
+
+def clean_for_tts(text: str) -> str:
+    """Sanitize text so the spoken response sounds natural."""
+    import re
+
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    text = re.sub(r"\*(.*?)\*", r"\1", text)
+    text = re.sub(r"__(.*?)__", r"\1", text)
+    text = re.sub(r"_(.*?)_", r"\1", text)
+    text = re.sub(r"`(.*?)`", r"\1", text)
+    text = re.sub(r"~~(.*?)~~", r"\1", text)
+    text = re.sub(r"^#{1,6}\s*(.*?)$", r"\1", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*[-*]\s+(.*?)$", r"• \1", text, flags=re.MULTILINE)
+    text = text.replace("&", "and").replace(">", "").replace("<", "").replace("#", "")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def load_local_llm_pipeline():
+    global _local_llm_pipe
+    if _local_llm_pipe is not None:
+        return _local_llm_pipe
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(LOCAL_LLM_MODEL_ID, local_files_only=True)
+        model = AutoModelForCausalLM.from_pretrained(LOCAL_LLM_MODEL_ID, local_files_only=True)
+        model.to("cpu")
+        pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device=-1)
+        _local_llm_pipe = pipe
+        print(f"Local LLM loaded (CPU, offline): {LOCAL_LLM_MODEL_ID}")
+        return pipe
+    except Exception as exc:
+        print(f"Failed to load local LLM '{LOCAL_LLM_MODEL_ID}': {exc}")
+        return None
+
+
+def _try_local_llm(text_prompt: str) -> str:
+    pipe = load_local_llm_pipeline()
+    if pipe is None:
+        return ""
+    try:
+        messages: List[Dict[str, str]] = []
+        if SYSTEM_PROMPT:
+            messages.append({"role": "system", "content": SYSTEM_PROMPT})
+        messages.append({"role": "user", "content": text_prompt})
+
+        tokenizer = getattr(pipe, "tokenizer", None)
+        if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
+            prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        else:
+            if SYSTEM_PROMPT:
+                prompt = f"System: {SYSTEM_PROMPT}\nUser: {text_prompt}\nAssistant:"
+            else:
+                prompt = f"User: {text_prompt}\nAssistant:"
+
+        outputs = pipe(prompt, max_new_tokens=500, do_sample=False)
+        out_text = outputs[0].get("generated_text", "") if outputs else ""
+        if prompt and out_text.startswith(prompt):
+            out_text = out_text[len(prompt):]
+        return clean_for_tts(out_text.strip())
+    except Exception as exc:
+        print(f"Local LLM generation failed: {exc}")
+        return ""
+
+
+def _query_llm_via_router(text_prompt: str) -> str:
+    if not (USE_HF_ROUTER and HF_ROUTER_TOKEN):
+        return ""
+    try:
+        models_to_try = [ROUTER_MODEL_ID] + [m for m in ROUTER_MODEL_FALLBACKS if m != ROUTER_MODEL_ID]
+        base_headers = {
+            "Authorization": f"Bearer {HF_ROUTER_TOKEN}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Accept-Encoding": "identity",
+        }
+        for model_id in models_to_try:
+            messages: List[Dict[str, str]] = []
+            if SYSTEM_PROMPT:
+                messages.append({"role": "system", "content": SYSTEM_PROMPT})
+            messages.append({"role": "user", "content": text_prompt})
+
+            payload = {
+                "model": model_id,
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 500,
+                "stream": False,
+            }
+            try:
+                resp = requests.post(
+                    f"{ROUTER_API_BASE}/chat/completions",
+                    headers=base_headers,
+                    json=payload,
+                    timeout=180,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except requests.exceptions.ContentDecodingError:
+                retry_headers = dict(base_headers)
+                retry_headers["Accept-Encoding"] = "identity"
+                resp = requests.post(
+                    f"{ROUTER_API_BASE}/chat/completions",
+                    headers=retry_headers,
+                    json=payload,
+                    timeout=180,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", "N/A")
+                print(f"Router API error for '{model_id}' (status={status}): {exc} (trying fallback)")
+                continue
+
+            choices = data.get("choices", []) if isinstance(data, dict) else []
+            if not choices:
+                print(f"Router returned no choices for '{model_id}'. Trying fallback...")
+                continue
+
+            msg = choices[0].get("message", {})
+            content = msg.get("content", "").strip()
+            if content:
+                return clean_for_tts(content)
+        return ""
+    except Exception as exc:
+        print(f"Router request failed: {exc}")
+        return ""
+
+
+def load_api_key():
+    """Load API keys for Groq and Hugging Face services."""
+    global HF_API_TOKEN, LLM_HEADERS, LLM_MODEL_ID, LLM_API_URL
+    global LOCAL_LLM_MODEL_ID, ENABLE_LOCAL_LLM
+    global USE_HF_ROUTER, HF_ROUTER_TOKEN, ROUTER_MODEL_ID, ROUTER_MODEL_FALLBACKS
+    global GROQ_API_KEY, GROQ_CLIENT, USE_GROQ, GROQ_MODEL
+
+    load_dotenv()
+
+    GROQ_API_KEY = os.getenv("groq_api")
+    if GROQ_API_KEY and GROQ_AVAILABLE:
+        try:
+            GROQ_CLIENT = Groq(api_key=GROQ_API_KEY)
+            print("Groq API key loaded successfully.")
+            env_groq_model = os.getenv("GROQ_MODEL")
+            if env_groq_model:
+                GROQ_MODEL = env_groq_model.strip()
+                print(f"Using Groq model from env: {GROQ_MODEL}")
+        except Exception as exc:
+            print(f"Error initializing Groq client: {exc}")
+            GROQ_CLIENT = None
+    else:
+        if not GROQ_API_KEY:
+            print("No Groq API key found. Set 'groq_api' in .env to use Groq.")
+        elif not GROQ_AVAILABLE:
+            print("Groq package not installed. Install with: pip install groq")
+        USE_GROQ = False
+
+    HF_API_TOKEN = os.getenv("hfapi")
+    env_model = os.getenv("HF_LLM_MODEL_ID")
+    if env_model:
+        LLM_MODEL_ID = env_model.strip()
+        LLM_API_URL = f"https://api-inference.huggingface.co/models/{LLM_MODEL_ID}"
+        print(f"Using LLM model from env: {LLM_MODEL_ID}")
+
+    env_local_model = os.getenv("LOCAL_LLM_MODEL_ID")
+    if env_local_model:
+        LOCAL_LLM_MODEL_ID = env_local_model.strip()
+    ENABLE_LOCAL_LLM = os.getenv("ENABLE_LOCAL_LLM", "false").strip().lower() in ("1", "true", "yes", "on")
+    if ENABLE_LOCAL_LLM:
+        print(f"Local LLM enabled: {LOCAL_LLM_MODEL_ID}")
+
+    HF_ROUTER_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HF_ROUTER_TOKEN")
+    router_model_env = os.getenv("HF_ROUTER_MODEL_ID")
+    if router_model_env:
+        ROUTER_MODEL_ID = router_model_env.strip()
+    router_fallbacks_env = os.getenv("HF_ROUTER_FALLBACK_MODELS")
+    if router_fallbacks_env:
+        ROUTER_MODEL_FALLBACKS = [m.strip() for m in router_fallbacks_env.split(",") if m.strip()]
+    USE_HF_ROUTER = bool(HF_ROUTER_TOKEN)
+    if USE_HF_ROUTER:
+        print(f"HF Router enabled with model: {ROUTER_MODEL_ID}")
+        if ROUTER_MODEL_FALLBACKS:
+            print(f"HF Router fallbacks: {ROUTER_MODEL_FALLBACKS}")
+
+    if not HF_API_TOKEN and not HF_ROUTER_TOKEN and not (GROQ_API_KEY and GROQ_AVAILABLE):
+        print("ERROR: No language model API keys found.")
+        print("Set either 'groq_api', 'hfapi', or 'HF_TOKEN' in your .env file.")
+        return False
+
+    if HF_API_TOKEN:
+        LLM_HEADERS = {"Authorization": f"Bearer {HF_API_TOKEN}"}
+        if not (GROQ_API_KEY and GROQ_AVAILABLE):
+            print("Hugging Face API token loaded successfully.")
+
+    return True
+
+
+def query_llm(text_prompt: str) -> str:
+    """Send prompt to configured language model backends."""
+    if USE_GROQ and GROQ_AVAILABLE and GROQ_CLIENT is not None:
+        print("Sending text to Groq for processing...")
+        groq_response = query_groq(text_prompt)
+        if groq_response:
+            return groq_response
+        print("Groq query failed, falling back to other options")
+
+    router_out = _query_llm_via_router(text_prompt)
+    if router_out:
+        return router_out
+
+    if not HF_API_TOKEN:
+        if ENABLE_LOCAL_LLM:
+            local = _try_local_llm(text_prompt)
+            if local:
+                return local
+        return "Sorry, my connection to the language model is not configured."
+
+    if SYSTEM_PROMPT:
+        formatted_prompt = f"[INST] {SYSTEM_PROMPT}\nUser: {text_prompt} [/INST]"
+    else:
+        formatted_prompt = f"[INST] {text_prompt} [/INST]"
+
+    models_to_try = [LLM_MODEL_ID] + [m for m in LLM_FALLBACK_MODELS if m != LLM_MODEL_ID]
+    payload = {
+        "inputs": formatted_prompt,
+        "parameters": {
+            "max_new_tokens": 500,
+            "temperature": 0.7,
+            "return_full_text": False,
+        },
+        "options": {"wait_for_model": True},
+    }
+
+    last_error = None
+    for model_id in models_to_try:
+        url = f"https://api-inference.huggingface.co/models/{model_id}"
+        try:
+            response = requests.post(url, headers=LLM_HEADERS, json=payload, timeout=60)
+            if response.status_code == 403:
+                print(f"Access denied to model '{model_id}'. Trying fallback...")
+                continue
+            if response.status_code in (401, 404, 429, 500, 503):
+                print(f"LLM '{model_id}' returned HTTP {response.status_code}. Trying fallback...")
+                last_error = f"HTTP {response.status_code}"
+                continue
+            response.raise_for_status()
+            result = response.json()
+
+            if isinstance(result, list) and result and "generated_text" in result[0]:
+                text = result[0]["generated_text"].strip()
+                return clean_for_tts(text)
+            if isinstance(result, dict) and "generated_text" in result:
+                text = result["generated_text"].strip()
+                return clean_for_tts(text)
+            if isinstance(result, dict) and "error" in result:
+                err_msg = result.get("error", "")
+                if "is currently loading" in err_msg:
+                    print("Model is loading on Hugging Face, please wait a moment and try again...")
+                    return "The AI model is warming up. Please ask me again in a minute."
+                print(f"LLM error from '{model_id}': {err_msg}. Trying fallback...")
+                last_error = err_msg
+                continue
+
+            print(f"LLM '{model_id}' returned an unexpected format: {result}. Trying fallback...")
+            last_error = "unexpected format"
+            continue
+
+        except requests.exceptions.RequestException as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", "N/A")
+            print(f"Error calling Hugging Face API for '{model_id}': {exc} (status={status}). Trying fallback...")
+            last_error = str(exc)
+            continue
+        except Exception as exc:
+            print(f"An unexpected error occurred during LLM query for '{model_id}': {exc}. Trying fallback...")
+            last_error = str(exc)
+            continue
+
+    if last_error:
+        print(f"LLM request failed after fallbacks. Last error: {last_error}")
+
+    if ENABLE_LOCAL_LLM:
+        local = _try_local_llm(text_prompt)
+        if local:
+            return local
+
+    return "I'm having trouble connecting to the language model right now."
+
+
+def debug_audio_info(arr, sr, label):
+    """Print compact diagnostics for audio buffers."""
+    try:
+        if arr is None or len(arr) == 0:
+            print(f"[DEBUG] {label}: Empty or None audio array")
+            return
+
+        dur = len(arr) / float(sr)
+        rms = float(np.sqrt(np.mean(arr ** 2)))
+        if label == "LoadedRaw":
+            print(f"[Audio] Loaded audio: {dur:.1f}s, RMS: {rms:.4f}")
+        if rms < 0.001:
+            print(f"[Audio] WARNING - Very low audio level (RMS={rms:.6f})")
+        if np.isnan(arr).any():
+            print("[Audio] WARNING - NaN values detected in audio")
+    except Exception:
+        pass
+
+
+def _load_audio_16k(path):
+    """Load audio file and resample to 16 kHz for Whisper."""
+    file_path = Path(path)
+    if not file_path.exists():
+        print(f"[STT] File not found: {path}")
+        return None
+    try:
+        if librosa:
+            data, sr = librosa.load(path, sr=16000, mono=True)
+        else:
+            sr, data = wav.read(path)
+            if data.dtype != np.float32:
+                if data.dtype == np.int16:
+                    data = data.astype(np.float32) / 32768.0
+                else:
+                    max_val = np.max(np.abs(data))
+                    data = data.astype(np.float32) / max_val if max_val > 0 else data.astype(np.float32)
+            if sr != 16000:
+                print(f"[STT] Resampling audio from {sr}Hz to 16000Hz")
+                try:
+                    from scipy import signal
+                    data = signal.resample_poly(data, 16000, sr)
+                except Exception:
+                    dur = len(data) / sr
+                    new_len = int(dur * 16000)
+                    data = np.interp(
+                        np.linspace(0, len(data), new_len, endpoint=False),
+                        np.arange(len(data)),
+                        data,
+                    ).astype(np.float32)
+                sr = 16000
+
+        rms = np.sqrt(np.mean(data ** 2))
+        print(f"[STT] Loaded audio RMS: {rms:.6f}")
+
+        if rms < 0.0001:
+            print(f"[STT] Warning: Audio file {path} is extremely quiet")
+            data = data * 2.0
+
+        if np.isnan(data).any():
+            print("[STT] Warning: NaN values found in audio data. Replacing with zeros.")
+            data = np.nan_to_num(data)
+
+        return data, 16000
+    except Exception as exc:
+        print(f"[STT] Failed loading audio {path}: {exc}")
+        return None
+
+
+def load_local_stt_pipeline(force_autodetect=False):
+    """Load Whisper Tiny pipeline with ARM-friendly fallback."""
+    global _stt_pipe
+    if _stt_pipe is not None:
+        return _stt_pipe
+
+    prefers_lightweight_backend = platform.machine().lower().startswith(("arm", "aarch"))
+
+    if prefers_lightweight_backend and not force_autodetect:
+        try:
+            fw_module = importlib.import_module("faster_whisper")
+            WhisperModel = getattr(fw_module, "WhisperModel")
+
+            class _FasterWhisperPipeline:
+                def __init__(self, model):
+                    self._model = model
+
+                def __call__(self, audio_array, generate_kwargs=None):
+                    if audio_array is None or len(audio_array) == 0:
+                        return {"text": ""}
+
+                    language = None
+                    task = "transcribe"
+                    if generate_kwargs:
+                        language = generate_kwargs.get("language")
+                        task = generate_kwargs.get("task", task)
+
+                    segments, _ = self._model.transcribe(
+                        audio_array,
+                        language=language,
+                        task=task,
+                        beam_size=1,
+                        best_of=1,
+                        temperature=0.0,
+                        condition_on_previous_text=False,
+                        compression_ratio_threshold=2.4,
+                        log_prob_threshold=-0.1,
+                        no_speech_threshold=0.65,
+                        without_timestamps=True,
+                        vad_filter=False,
+                        suppress_blank=True,
+                    )
+
+                    text = " ".join(segment.text.strip() for segment in segments).strip()
+                    return {"text": text}
+
+            fw_cache_dir = OPTIMIZED_DIR / "faster-whisper"
+            fw_cache_dir.mkdir(parents=True, exist_ok=True)
+
+            cpu_threads = max(1, min(4, os.cpu_count() or 1))
+            fw_model = WhisperModel(
+                "tiny",
+                device="cpu",
+                compute_type="int8",
+                download_root=str(fw_cache_dir),
+                cpu_threads=max(1, min(2, cpu_threads)),
+                num_workers=1,
+            )
+
+            _stt_pipe = _FasterWhisperPipeline(fw_model)
+            print("Loaded Whisper tiny via faster-whisper backend (int8)")
+            return _stt_pipe
+        except ImportError:
+            print(
+                "faster-whisper not installed; install with 'pip install faster-whisper' "
+                "for optimal performance on Raspberry Pi."
+            )
+        except Exception as exc:
+            print(f"Failed to initialize faster-whisper backend: {exc}")
+
+    try:
+        print("Loading Whisper tiny model directly without quantization...")
+
+        model_dir = OPTIMIZED_DIR / "models--openai--whisper-tiny"
+
+        processor = None
+        model = None
+
+        if model_dir.exists() and (model_dir / "model.safetensors").exists():
+            try:
+                processor = AutoProcessor.from_pretrained(str(model_dir), local_files_only=True)
+                model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                    str(model_dir),
+                    torch_dtype=torch.float32,
+                    local_files_only=True,
+                )
+                model.eval()
+                print("Successfully loaded Whisper tiny model from local directory")
+            except Exception as local_error:
+                print(f"Failed to load Whisper tiny from {model_dir}: {local_error}")
+                processor = None
+                model = None
+
+        if processor is None or model is None:
+            try:
+                print("Whisper tiny model not found locally, downloading from Hugging Face (one-time operation)...")
+                processor = AutoProcessor.from_pretrained(
+                    "openai/whisper-tiny",
+                    cache_dir=str(OPTIMIZED_DIR),
+                    local_files_only=False,
+                )
+
+                model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                    "openai/whisper-tiny",
+                    cache_dir=str(OPTIMIZED_DIR),
+                    torch_dtype=torch.float32,
+                    local_files_only=False,
+                )
+
+                model.eval()
+                print("Successfully downloaded Whisper tiny model")
+                model_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as download_error:
+                print(f"Failed to download Whisper tiny model: {download_error}")
+                print("Please ensure the device has internet access or pre-download the model using setup_whisper_tiny.py")
+                return None
+
+        stt_pipe = pipeline(
+            "automatic-speech-recognition",
+            model=model,
+            tokenizer=processor.tokenizer,
+            feature_extractor=processor.feature_extractor,
+            max_new_tokens=128,
+            batch_size=1,
+            return_timestamps=False,
+        )
+        _stt_pipe = stt_pipe
+
+        print("Whisper tiny model loaded successfully!")
+        return stt_pipe
+    except Exception as exc:
+        print(f"Failed to initialize STT pipeline: {exc}")
+        return None
+
+
+def load_speaker_recognizer():
+    """Load the SpeechBrain ECAPA-TDNN speaker recognizer on CPU."""
+    global _speaker_recognizer
+    if _speaker_recognizer is not None:
+        return _speaker_recognizer
+
+    if not SPEECHBRAIN_AVAILABLE:
+        raise RuntimeError(
+            "speechbrain package is required for speaker recognition."
+        )
+
+    save_dir = OPTIMIZED_DIR / "speechbrain_ecapa"
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    run_opts = {"device": "cpu"}
+
+    try:
+        recognizer = SpeakerRecognition.from_hparams(
+            source="speechbrain/spkrec-ecapa-voxceleb",
+            savedir=str(save_dir),
+            run_opts=run_opts,
+        )
+        _speaker_recognizer = recognizer
+        print("Loaded ECAPA-TDNN speaker recognizer (SpeechBrain)")
+        return recognizer
+    except Exception as exc:
+        print(f"Failed to load SpeechBrain ECAPA recognizer: {exc}")
+        raise
+
+
+def transcribe_audio(audio_path):
+    """Transcribe audio path to text with Whisper Tiny."""
+    pipe = load_local_stt_pipeline()
+    if pipe is None:
+        return ""
+    loaded = _load_audio_16k(audio_path)
+    if loaded is None:
+        return ""
+    audio_array, sr = loaded
+    debug_audio_info(audio_array, sr, "LoadedRaw")
+
+    if len(audio_array) < sr * 0.2:
+        print("[STT] Audio too short for reliable transcription")
+        return ""
+
+    processed_audio = audio_array.copy()
+
+    try:
+        from scipy import signal
+        from scipy.ndimage import maximum_filter1d, uniform_filter1d
+
+        NOISE_REDUCTION_SENSITIVITY = 0.8
+        VOICE_DETECTION_PERCENTILE = 80
+
+        sos = signal.butter(1, 70, "hp", fs=sr, output="sos")
+        processed_audio = signal.sosfilt(sos, processed_audio)
+
+        amplitude = np.abs(processed_audio)
+        voice_threshold = np.percentile(amplitude, VOICE_DETECTION_PERCENTILE)
+
+        is_voice = amplitude > voice_threshold
+        window_size = int(sr * 0.15)
+        is_voice_expanded = maximum_filter1d(is_voice.astype(float), size=window_size)
+
+        smooth_window = int(sr * 0.25)
+        smooth_envelope = uniform_filter1d(is_voice_expanded, size=smooth_window)
+
+        noise_floor = 1.0 - NOISE_REDUCTION_SENSITIVITY
+        gain_envelope = smooth_envelope ** (1.0 - NOISE_REDUCTION_SENSITIVITY * 0.5)
+        final_envelope = noise_floor + gain_envelope * (1.0 - noise_floor)
+
+        processed_audio = processed_audio * final_envelope
+
+        current_rms = np.sqrt(np.mean(processed_audio ** 2))
+        if current_rms > 0.001:
+            target_rms = 0.15
+            gain = min(target_rms / current_rms, 3.0)
+            processed_audio = processed_audio * gain
+
+        processed_audio = np.clip(processed_audio, -0.95, 0.95)
+
+    except Exception as exc:
+        print(f"[STT] Voice enhancement failed: {exc}. Using original audio.")
+        processed_audio = audio_array
+
+    audio_versions = [
+        {"name": "processed", "array": processed_audio, "task": "transcribe"},
+        {"name": "processed", "array": processed_audio, "task": "translate"},
+    ]
+
+    best_text = ""
+    best_score = 0
+
+    for version in audio_versions:
+        try:
+            result = pipe(
+                {"array": version["array"], "sampling_rate": sr},
+                generate_kwargs={"task": version["task"]},
+            )
+            text = result.get("text", "").strip()
+
+            word_count = len(text.split())
+            char_count = len(text)
+
+            score = word_count
+            if version["task"] == "transcribe" and char_count <= 5:
+                score += 5
+
+            print(f"[STT] {version['task']} result: '{text}'")
+
+            if score > best_score or (score == best_score and version["task"] == "transcribe"):
+                best_text = text
+                best_score = score
+
+            if word_count >= 3 and version["task"] == "translate":
+                break
+
+        except Exception as exc:
+            print(f"[STT] {version['task']} attempt failed: {exc}")
+
+    return best_text
 
 # =============================================================================
 # END VOICE ACTIVITY DETECTION
@@ -242,21 +1216,60 @@ def clean_voice_database(voice_db_processed_dir, voice_db_embeddings_dir, backup
     print(f"Voice database cleaned. Removed {total_files} files.")
     return True
 
-def create_voice_profile_internal(encoder, voice_db_processed_dir, voice_db_embeddings_dir, sample_rate=16000):
+def create_voice_profile_internal(_encoder_unused, voice_db_processed_dir, voice_db_embeddings_dir, sample_rate=16000):
     """Create a new voice profile with multilingual recordings."""
     print("\n=== Create New Voice Profile ===")
     
-    speaker = input("Enter speaker name (lowercase, underscores allowed): ").strip().lower()
-    if not speaker:
+    import re
+
+    requested_name = input("Enter speaker name (lowercase, underscores allowed): ").strip().lower()
+    if not requested_name:
         print("Invalid name. Operation cancelled.")
         return False
-    
+
+    def split_variant(name: str) -> Tuple[str, Optional[int]]:
+        match = re.match(r"^(.*?)(?:_(\d+))?$", name)
+        if not match:
+            return name, None
+        base = match.group(1) or name
+        suffix = match.group(2)
+        return base, int(suffix) if suffix is not None else None
+
+    base_name, requested_suffix = split_variant(requested_name)
+    existing_indices: List[int] = []
+    if voice_db_embeddings_dir.exists():
+        pattern = re.compile(rf"^{re.escape(base_name)}(?:_(\d+))?$")
+        for path in voice_db_embeddings_dir.glob(f"{base_name}*.npy"):
+            match = pattern.match(path.stem)
+            if not match:
+                continue
+            suffix = match.group(1)
+            existing_indices.append(int(suffix) if suffix is not None else 0)
+
+    speaker = requested_name
+
+    if requested_suffix is None:
+        if 0 in existing_indices:
+            next_index = max(existing_indices) + 1
+            speaker = f"{base_name}_{next_index}"
+            print(
+                f"Profile '{base_name}' already exists. Creating new variant '{speaker}'."
+            )
+        else:
+            speaker = base_name
+    else:
+        if requested_suffix in existing_indices:
+            overwrite = input(
+                f"Variant '{requested_name}' already exists. Overwrite? (y/n): "
+            ).strip().lower()
+            if overwrite != 'y':
+                print("Operation cancelled.")
+                return False
+            speaker = requested_name
+        else:
+            speaker = requested_name
+
     embedding_path = voice_db_embeddings_dir / f"{speaker}.npy"
-    if embedding_path.exists():
-        overwrite = input(f"Profile '{speaker}' already exists. Overwrite? (y/n): ").strip().lower()
-        if overwrite != 'y':
-            print("Operation cancelled.")
-            return False
     
     while True:
         gender = input("Enter speaker gender (male / female / unknown): ").strip().lower()
@@ -300,6 +1313,20 @@ def create_voice_profile_internal(encoder, voice_db_processed_dir, voice_db_embe
             
             raw_path = voice_db_processed_dir / (f"{speaker}_raw.wav" if i == 1 else f"{speaker}_raw_{i}.wav")
             processed_path = voice_db_processed_dir / (f"{speaker}.wav" if i == 1 else f"{speaker}_{i}.wav")
+
+            if raw_path.exists():
+                try:
+                    raw_path.unlink()
+                except PermissionError:
+                    unique = uuid.uuid4().hex
+                    raw_path = raw_path.with_name(f"{speaker}_raw_{unique}.wav")
+
+            if processed_path.exists():
+                try:
+                    processed_path.unlink()
+                except PermissionError:
+                    unique = uuid.uuid4().hex
+                    processed_path = processed_path.with_name(f"{speaker}_{unique}.wav")
             
             wav.write(raw_path, sample_rate, audio)
             recordings.append((audio, raw_path, processed_path))
@@ -322,14 +1349,19 @@ def create_voice_profile_internal(encoder, voice_db_processed_dir, voice_db_embe
         for i, (audio, raw_path, processed_path) in enumerate(recordings, 1):
             try:
                 print(f"{i}/{len(recordings)}... ", end="", flush=True)
-                raw_wav = preprocess_wav(str(raw_path))
-                wav.write(processed_path, sample_rate, (np.clip(raw_wav, -1.0, 1.0) * 32767).astype(np.int16))
-                emb = encoder.embed_utterance(raw_wav)
+                raw_wav = preprocess_audio_for_verification(str(raw_path))
+                wav.write(
+                    processed_path,
+                    sample_rate,
+                    (np.clip(raw_wav, -1.0, 1.0) * 32767).astype(np.int16),
+                )
+                emb, _ = compute_enhanced_embedding(None, raw_wav)
+                if emb is None:
+                    print(f"Embedding generation failed for recording {i}")
+                    continue
+                emb = np.asarray(emb, dtype=np.float32).reshape(-1)
                 all_embeddings.append(emb)
-                
-                if i > 1:
-                    np.save(voice_db_embeddings_dir / f"{speaker}_{i}.npy", emb)
-                    
+
             except Exception as e:
                 print(f"Error processing recording {i}: {e}")
         
@@ -345,11 +1377,20 @@ def create_voice_profile_internal(encoder, voice_db_processed_dir, voice_db_embe
             avg_embedding = avg_embedding / np.linalg.norm(avg_embedding)
         else:
             avg_embedding = all_embeddings[0]
-        
+        avg_embedding = np.asarray(avg_embedding, dtype=np.float32).reshape(-1)
+
         np.save(voice_db_embeddings_dir / f"{speaker}.npy", avg_embedding)
-        
-        with open(voice_db_processed_dir / f"{speaker}_gender.txt", 'w') as f:
-            f.write(gender)
+
+        canonical_gender_file = voice_db_processed_dir / f"{base_name}_gender.txt"
+        try:
+            canonical_gender_file.write_text(gender)
+        except Exception:
+            print(f"Warning: Failed to write gender file for base '{base_name}'")
+        if speaker != base_name:
+            try:
+                (voice_db_processed_dir / f"{speaker}_gender.txt").write_text(gender)
+            except Exception:
+                print(f"Warning: Failed to write gender file for variant '{speaker}'")
         
         print("\n=== Voice Profile Created Successfully ===")
         print(f"Speaker name: {speaker}")
@@ -401,7 +1442,7 @@ def test_voice_authentication_internal(encoder):
 # --- Global Configuration ---
 SAMPLE_RATE = RS_SAMPLING_RATE  # 16000 Hz
 RECORD_DURATION = 5  # seconds
-SIMILARITY_THRESHOLD = 0.60  # Match threshold for voice authentication
+SIMILARITY_THRESHOLD = 0.50  # Match threshold for voice authentication
 VOICE_DB_PROCESSED_DIR = Path("./voice_db_processed")
 VOICE_DB_EMBEDDINGS_DIR = Path("./voice_db_embeddings")
 DEFAULT_TTS_VOICE_FILE = Path("./tts_outputs/command_response.wav")
@@ -463,29 +1504,29 @@ HINDI_DIRECTION_WORDS = {
     "dai taraf": "right",
     "daaye taraf": "right",
     
-    # Rotate left words
-    "बाएं घूमो": "rotate_left",
-    "बायें घूमो": "rotate_left",
-    "bayen ghumo": "rotate_left",
-    "baayen ghumo": "rotate_left",
-    "bai taraf ghumo": "rotate_left",
-    "bayein taraf ghumo": "rotate_left",
-    "बाएं मुड़ो": "rotate_left",
-    "बायें मुड़ो": "rotate_left",
-    "bayen mudo": "rotate_left",
-    "baayen mudo": "rotate_left",
+    # Rotate/turn left words (mapped to left)
+    "बाएं घूमो": "left",
+    "बायें घूमो": "left",
+    "bayen ghumo": "left",
+    "baayen ghumo": "left",
+    "bai taraf ghumo": "left",
+    "bayein taraf ghumo": "left",
+    "बाएं मुड़ो": "left",
+    "बायें मुड़ो": "left",
+    "bayen mudo": "left",
+    "baayen mudo": "left",
     
-    # Rotate right words
-    "दाएं घूमो": "rotate_right",
-    "दायें घूमो": "rotate_right",
-    "dayen ghumo": "rotate_right",
-    "daayen ghumo": "rotate_right",
-    "daaye taraf ghumo": "rotate_right",
-    "dai taraf ghumo": "rotate_right",
-    "दाएं मुड़ो": "rotate_right",
-    "दायें मुड़ो": "rotate_right",
-    "dayen mudo": "rotate_right",
-    "daayen mudo": "rotate_right",
+    # Rotate/turn right words (mapped to right)
+    "दाएं घूमो": "right",
+    "दायें घूमो": "right",
+    "dayen ghumo": "right",
+    "daayen ghumo": "right",
+    "daaye taraf ghumo": "right",
+    "dai taraf ghumo": "right",
+    "दाएं मुड़ो": "right",
+    "दायें मुड़ो": "right",
+    "dayen mudo": "right",
+    "daayen mudo": "right",
     
     # Stop words
     "रुको": "stop",
@@ -613,6 +1654,7 @@ WHEELCHAIR_COMMANDS = {
     "left": [
         # English variations
         "left", "go left", "move left", "turn left", "to the left", "leftward",
+        "rotate left", "spin left", "circle left", "turn left side", "veer left",
         # Hindi variations (with distinctive forms)
         "बाएं", "बाएं मुड़ो", "बाएं जाओ", "बाएं चलो", "बायीं ओर", "बायीं तरफ", "बायें घूमो",
         "बाई", "बाई तरफ", "बाई ओर", "बाई मुड़ो", "बाई मुडो", "बाई मुरें", "बाई मूड़ो", 
@@ -663,6 +1705,7 @@ WHEELCHAIR_COMMANDS = {
     "right": [
         # English variations
         "right", "go right", "move right", "turn right", "to the right", "rightward",
+        "rotate right", "spin right", "circle right", "turn right side", "veer right",
         # Hindi variations (with distinctive forms)
         "दाएं", "दाएं मुड़ो", "दाएं जाओ", "दाएं चलो", "दायीं ओर", "दायीं तरफ", "दायें घूमो",
         "दाई", "दाई तरफ", "दाई ओर", "दाई मुड़ो", "दाई मुडो", "दाई मुरें", "दाई मूड़ो",
@@ -972,9 +2015,15 @@ def preprocess_audio_for_verification(audio_path):
     """
     from scipy import signal
     import numpy as np
-    
-    # Get raw audio data using resemblyzer's preprocess function
-    raw_wav = preprocess_wav(audio_path)
+
+    loaded = _load_audio_16k(audio_path)
+    if loaded is None:
+        raise RuntimeError("Failed to load audio for verification")
+    raw_wav, _ = loaded
+    raw_wav = ensure_minimum_duration(raw_wav, SAMPLE_RATE, target_seconds=1.2)
+    trimmed_wav = trim_audio_to_speech(raw_wav, SAMPLE_RATE, threshold_ratio=0.25, min_threshold=0.008)
+    if trimmed_wav.size > int(SAMPLE_RATE * 0.4):
+        raw_wav = trimmed_wav
     
     # Calculate signal energy
     amplitude = np.abs(raw_wav)
@@ -1023,6 +2072,7 @@ def preprocess_audio_for_verification(audio_path):
     # This dramatically improves voice profile quality
     voice_only = np.zeros_like(raw_wav)
     voice_only[smooth_mask] = raw_wav[smooth_mask]
+    voice_only = fast_noise_gate(voice_only, SAMPLE_RATE, floor_percentile=12.0, gate_strength=1.4)
     
     # 4. Normalize to consistent level
     proc_rms = np.sqrt(np.mean(voice_only[smooth_mask]**2)) if np.any(smooth_mask) else 0.001
@@ -1038,7 +2088,11 @@ def preprocess_audio_for_verification(audio_path):
     final_rms = np.sqrt(np.mean(processed_wav**2))
     print(f"[Audio] Processed RMS: {final_rms:.4f} (voice-focused processing)")
     
-    return processed_wav
+    processed_wav = ensure_minimum_duration(processed_wav, SAMPLE_RATE, target_seconds=1.2)
+    processed_wav = apply_subtle_noise_reduction(processed_wav, SAMPLE_RATE, SPEAKER_NOISE_REDUCTION_BLEND)
+    processed_wav = fast_noise_gate(processed_wav, SAMPLE_RATE, floor_percentile=10.0, gate_strength=1.3)
+
+    return processed_wav.astype(np.float32)
 
 # --- Voice Authentication Functions ---
 
@@ -1081,8 +2135,6 @@ def get_profile_gender(profile_name):
             
     # return 'unknown'
 
-# Moved cosine_similarity to system.py and imported from there
-
 def hindi_direction_detector(text: str) -> Optional[str]:
     """
     Detect direction commands from Hindi text.
@@ -1109,24 +2161,24 @@ def hindi_direction_detector(text: str) -> Optional[str]:
     # First check for rotation commands with compound patterns
     rotation_patterns = [
         # Right rotation patterns
-        (r'दाएं\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "rotate_right"),
-        (r'दायें\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "rotate_right"),
-        (r'दाईं\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "rotate_right"),
-        (r'दाई\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "rotate_right"),
-        (r'dai\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "rotate_right"),
-        (r'daaye\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "rotate_right"),
-        (r'dayen\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "rotate_right"),
-        (r'daayen\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "rotate_right"),
+        (r'दाएं\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "right"),
+        (r'दायें\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "right"),
+        (r'दाईं\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "right"),
+        (r'दाई\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "right"),
+        (r'dai\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "right"),
+        (r'daaye\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "right"),
+        (r'dayen\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "right"),
+        (r'daayen\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "right"),
         
         # Left rotation patterns
-        (r'बाएं\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "rotate_left"),
-        (r'बायें\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "rotate_left"),
-        (r'बाईं\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "rotate_left"),
-        (r'बाई\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "rotate_left"),
-        (r'bai\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "rotate_left"),
-        (r'baye\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "rotate_left"),
-        (r'bayen\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "rotate_left"),
-        (r'baayen\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "rotate_left"),
+        (r'बाएं\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "left"),
+        (r'बायें\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "left"),
+        (r'बाईं\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "left"),
+        (r'बाई\s+(?:तरफ|ओर)?\s*(?:घूमो|मुड़ो|घूम|मुड़|फिरो|फिर)', "left"),
+        (r'bai\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "left"),
+        (r'baye\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "left"),
+        (r'bayen\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "left"),
+        (r'baayen\s*(?:taraf|or)?\s*(?:ghumo|mudo|ghoom|mud|firo|fir|gumo)', "left"),
     ]
     
     # Check for rotation patterns
@@ -1158,20 +2210,20 @@ def hindi_direction_detector(text: str) -> Optional[str]:
     # Check for taraf/or (direction) words with ghumo/mudo (turn/rotate)
     if "taraf" in text_clean and "ghumo" in text_clean:
         if any(word in text_clean for word in ["dai", "daaye", "dayen", "daayen", "right"]):
-            return "rotate_right"
+            return "right"
         if any(word in text_clean for word in ["bai", "baaye", "bayen", "baayen", "left"]):
-            return "rotate_left"
+            return "left"
             
     if "or" in text_clean and any(word in text_clean for word in ["ghumo", "mudo", "ghum", "gumo"]):
         if any(word in text_clean for word in ["dai", "daaye", "dayen", "daayen", "right"]):
-            return "rotate_right"
+            return "right"
         if any(word in text_clean for word in ["bai", "baaye", "bayen", "baayen", "left"]):
-            return "rotate_left"
+            return "left"
     
     # If no direction found
     return None
 
-def process_command_with_whisper_tiny(audio_path=None, detect_lang=True):
+def process_command_with_whisper_tiny(audio_path=None, detect_lang=True, fast_mode=FAST_TRANSCRIPTION_ENABLED):
     """
     Process voice command using Whisper tiny model directly.
     This function handles recording (if audio_path not provided),
@@ -1180,9 +2232,10 @@ def process_command_with_whisper_tiny(audio_path=None, detect_lang=True):
     Args:
         audio_path: Optional path to existing audio file. If None, will record new audio.
         detect_lang: Whether to auto-detect language (True) or use DEFAULT_LANGUAGE (False)
+        fast_mode: Skip heavy denoising for lower latency on edge devices.
         
     Returns:
-        Tuple of (matched_command, confidence_score)
+        Tuple of (matched_command, confidence_score, transcription)
     """
     # Record audio if path not provided
     if audio_path is None:
@@ -1193,51 +2246,26 @@ def process_command_with_whisper_tiny(audio_path=None, detect_lang=True):
         # Create temp directory if it doesn't exist
         TEMP_DIR.mkdir(exist_ok=True)
         
-        # Import voice activity detection
-        try:
-            from voice_activity import record_with_vad, detect_silence
-            vad_available = True
-        except ImportError:
-            vad_available = False
-        
-        # Use voice activity detection if available
-        if vad_available:
-            print("\n[Command Recording] Press Enter to start recording command...")
-            input()
-            
-            # Use VAD-enhanced recording
-            prompt_phrase = "Please speak your command clearly"
-            audio_float, speech_percent = record_with_vad(
-                RECORD_DURATION, 
-                SAMPLE_RATE, 
-                max_attempts=2,
-                prompt_phrase=prompt_phrase
-            )
-            
-            if audio_float is None or speech_percent < 10:
-                print("Failed to detect sufficient speech in recording.")
-                print("Please speak clearly when giving commands.")
-                return None, 0
-                
-            # Convert to int16
-            audio = (np.clip(audio_float, -1.0, 1.0) * 32767).astype(np.int16)
-            wav.write(audio_path, SAMPLE_RATE, audio)
-            
-        else:
-            # Fallback to basic recording
-            print("\n[Command Recording] Press Enter to start recording command...")
-            input()
-            print(f"Recording for {RECORD_DURATION} seconds...")
-            audio = sd.rec(int(RECORD_DURATION * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1, dtype='int16')
-            sd.wait()
-            wav.write(audio_path, SAMPLE_RATE, audio.astype(np.int16))
-            
-            # Basic silence detection
-            audio_float = audio.flatten().astype(np.float32) / 32768.0
-            rms = np.sqrt(np.mean(audio_float**2))
-            if rms < 0.01:  # Very low volume
-                print("Warning: Recording volume is very low. Please speak louder.")
-                # Continue anyway since we might still be able to process it
+        # Use built-in voice activity detection helpers
+        print("\n[Command Recording] Press Enter to start recording command...")
+        input()
+
+        prompt_phrase = "Please speak your command clearly"
+        audio_float, speech_percent = record_with_vad(
+            RECORD_DURATION,
+            SAMPLE_RATE,
+            max_attempts=2,
+            prompt_phrase=prompt_phrase,
+        )
+
+        if audio_float is None or speech_percent < 10:
+            print("Failed to detect sufficient speech in recording.")
+            print("Please speak clearly when giving commands.")
+            return None, 0
+
+        # Convert to int16 and persist for downstream processing
+        audio = (np.clip(audio_float, -1.0, 1.0) * 32767).astype(np.int16)
+        wav.write(audio_path, SAMPLE_RATE, audio)
         
         # Process the audio for better voice command recognition
     try:
@@ -1249,28 +2277,135 @@ def process_command_with_whisper_tiny(audio_path=None, detect_lang=True):
             language_code = DEFAULT_LANGUAGE
         
         # Transcribe using Whisper tiny model directly
-        transcription = transcribe_command_audio(audio_path, language=language_code)
-        
-        if not transcription:
+        transcription, stt_success, stt_diag = transcribe_command_audio(
+            audio_path,
+            language=language_code,
+            fast_mode=fast_mode,
+        )
+        if not stt_success or not transcription:
             print("Failed to transcribe audio or no speech detected.")
-            return None, 0
+            if stt_diag:
+                print(f"[STT Diagnostics] {json.dumps(stt_diag, indent=2)}")
+            return None, 0, transcription
+
+        print(f"Transcription: '{transcription}'")
+        if stt_diag:
+            print(f"[STT Diagnostics] {json.dumps(stt_diag, indent=2)}")
         
         # Try Hindi direction detection first for better rotation command detection
         hindi_command = hindi_direction_detector(transcription)
         if hindi_command:
             print(f"Found command through Hindi direction detector: '{hindi_command}'")
-            return hindi_command, 0.90  # High confidence for direct matches
+            return hindi_command, 0.90, transcription  # High confidence for direct matches
             
         # Match the transcription to a wheelchair command
         command, confidence = match_command(transcription)
         
-        return command, confidence
+        return command, confidence, transcription
         
     except Exception as e:
         print(f"Error processing command: {e}")
-        return None, 0
+        return None, 0, ""
 
-def identify_speaker(encoder=None, is_registration=False):
+def compute_enhanced_embedding(_encoder_unused, audio: np.ndarray):
+    """Generate a robust speaker embedding using SpeechBrain ECAPA-TDNN."""
+    if audio is None or audio.size == 0:
+        return None, None
+
+    recognizer = load_speaker_recognizer()
+
+    safe_audio = ensure_minimum_duration(audio, SAMPLE_RATE, target_seconds=1.1)
+    if safe_audio.ndim > 1:
+        safe_audio = safe_audio.flatten()
+
+    rms = np.sqrt(np.mean(safe_audio**2)) if safe_audio.size else 0.0
+    target_rms = 0.2
+    if rms > 0:
+        gain = target_rms / max(rms, 1e-4)
+        safe_audio = np.clip(safe_audio * gain, -1.0, 1.0)
+
+    safe_audio = apply_subtle_noise_reduction(safe_audio, SAMPLE_RATE, SPEAKER_NOISE_REDUCTION_BLEND)
+    safe_audio = fast_noise_gate(safe_audio, SAMPLE_RATE, floor_percentile=5.0, gate_strength=1.1)
+
+    segment_duration = max(0.5, float(SPEAKER_EMBED_SEGMENT_SECONDS))
+    segment_samples = max(160, int(SAMPLE_RATE * segment_duration))
+    overlap = float(np.clip(SPEAKER_EMBED_OVERLAP, 0.0, 0.95))
+    step = max(1, int(segment_samples * (1.0 - overlap)))
+    if step >= segment_samples:
+        step = max(1, segment_samples // 2)
+
+    segments: List[np.ndarray] = []
+    if safe_audio.size <= segment_samples:
+        segments = [ensure_minimum_duration(safe_audio, SAMPLE_RATE, target_seconds=segment_duration)]
+    else:
+        for start in range(0, safe_audio.size - segment_samples + 1, step):
+            segment = safe_audio[start:start + segment_samples]
+            segments.append(segment)
+        tail_start = max(0, safe_audio.size - segment_samples)
+        tail = safe_audio[tail_start:]
+        if tail.size:
+            segments.append(tail)
+
+    if not segments:
+        segments = [safe_audio]
+
+    global_rms = float(np.sqrt(np.mean(safe_audio**2))) if safe_audio.size else 0.0
+    min_segment_rms = max(float(SPEAKER_SEGMENT_RMS_FLOOR), global_rms * float(SPEAKER_SEGMENT_RMS_RATIO))
+    filtered_segments: List[np.ndarray] = []
+    dropped_segments = 0
+    loudest_seg: Optional[np.ndarray] = None
+    loudest_rms = -1.0
+    for seg in segments:
+        seg_rms = float(np.sqrt(np.mean(seg**2))) if seg.size else 0.0
+        if seg_rms >= min_segment_rms:
+            filtered_segments.append(seg)
+        else:
+            dropped_segments += 1
+        if seg_rms > loudest_rms:
+            loudest_rms = seg_rms
+            loudest_seg = seg
+    if not filtered_segments and loudest_seg is not None:
+        filtered_segments = [loudest_seg]
+    if dropped_segments:
+        print(
+            f"[Speaker] Dropped {dropped_segments} low-energy segments below {min_segment_rms:.4f} RMS"
+        )
+    segments = filtered_segments
+
+    max_segments = 5
+    if len(segments) > max_segments:
+        indices = np.linspace(0, len(segments) - 1, num=max_segments, dtype=int)
+        segments = [segments[i] for i in indices]
+
+    print(f"[Speaker] Embedding segments considered: {len(segments)}")
+
+    device = getattr(recognizer, "device", "cpu")
+    batch_tensors = []
+    for seg in segments:
+        padded = ensure_minimum_duration(seg, SAMPLE_RATE, target_seconds=segment_duration)
+        clipped = np.clip(padded, -1.0, 1.0).astype(np.float32)
+        batch_tensors.append(torch.from_numpy(clipped))
+
+    wav_tensor = torch.stack(batch_tensors).to(device)
+
+    with torch.no_grad():
+        embedding_tensor = recognizer.encode_batch(wav_tensor)
+
+    if embedding_tensor is None:
+        return None, None
+
+    embedding_np = embedding_tensor.detach().cpu().numpy().astype(np.float32)
+    embedding = embedding_np
+    if embedding_np.ndim > 1:
+        try:
+            embedding = embedding_np.reshape(-1, embedding_np.shape[-1]).mean(axis=0)
+        except Exception:
+            embedding = embedding_np.mean(axis=0)
+    embedding = _normalize_vector(embedding)
+
+    return embedding, None
+
+def identify_speaker(_encoder_unused=None, is_registration=False):
     """
     Improved speaker identification with enhanced reliability and gender verification.
     Uses multiple comparison methods, voice-focused processing, and gender detection
@@ -1282,17 +2417,12 @@ def identify_speaker(encoder=None, is_registration=False):
     
     Returns (name, score, processed_path) if match found, else (None, score, processed_path).
     """
-    # Load the encoder if it wasn't provided
-    if encoder is None:
-        print("Loading voice encoder (CPU)... This may take a moment.")
-        try:
-            from resemblyzer import VoiceEncoder
-            encoder = VoiceEncoder(device="cpu")
-            print("Voice encoder loaded successfully.")
-        except Exception as e:
-            print(f"CRITICAL ERROR: Failed to load voice encoder: {e}")
-            print("Please ensure resemblyzer is properly installed.")
-            return None, 0, None
+    # Load the speaker recognizer
+    try:
+        recognizer = load_speaker_recognizer()
+    except Exception as exc:
+        print(f"CRITICAL ERROR: Failed to load speaker recognizer: {exc}")
+        return None, 0, None
             
     # Check if we have any stored voice profiles
     embeddings_list = list(VOICE_DB_EMBEDDINGS_DIR.glob("*.npy"))
@@ -1352,7 +2482,8 @@ def identify_speaker(encoder=None, is_registration=False):
             lang = "english"
             print("\nEnglish selected.")
             
-        prompt_phrase = random.choice(verification_phrases[lang])
+        phrases = verification_phrases[lang]
+        prompt_phrase = phrases[int(time.time()) % len(phrases)]
     
     # Record with voice activity detection
     print("\n[Voice Authentication] Press Enter and speak your command...")
@@ -1375,13 +2506,19 @@ def identify_speaker(encoder=None, is_registration=False):
     
     # Process the audio with simplified processing for better efficiency
     try:
-        # Basic preprocessing - use resemblyzer's built-in preprocessing which is optimized
-        from resemblyzer import preprocess_wav
-        reduced = preprocess_wav(str(raw_path))
-        wav.write(processed_path, SAMPLE_RATE, (np.clip(reduced, -1.0, 1.0) * 32767).astype(np.int16))
-        
+        # Basic preprocessing using our verification pipeline tuned for ECAPA embeddings
+        reduced = preprocess_audio_for_verification(str(raw_path))
+        wav.write(
+            processed_path,
+            SAMPLE_RATE,
+            (np.clip(reduced, -1.0, 1.0) * 32767).astype(np.int16),
+        )
+
         # Generate the embedding directly - this is the essential step
-        test_emb = encoder.embed_utterance(reduced)
+        test_emb, _ = compute_enhanced_embedding(recognizer, reduced)
+        if test_emb is None:
+            raise RuntimeError("Failed to compute speaker embedding")
+        test_emb = np.asarray(test_emb, dtype=np.float32).reshape(-1)
         
         # Use a simple and faster approach to detect gender - just check if gender was provided by user
         # This avoids the CPU-intensive gender detection
@@ -1392,103 +2529,189 @@ def identify_speaker(encoder=None, is_registration=False):
         print(f"Audio processing failed: {e}")
         return None, 0, raw_path
 
-    # Compare against all voice profiles using multiple metrics
-    print(f"Comparing against {len(embeddings_list)} voice profiles...")
-    scores = []
-    gender_filtered_scores = []  # Will hold only gender-matching profiles
-    
-    # Dictionary to store gender of each profile for reference
-    profile_genders = {}
-    
-    for p in embeddings_list:
-        name = p.stem
+    # Compare against stored embeddings grouped by canonical speaker name
+    import re
+    grouped_embeddings: Dict[str, List[Tuple[str, np.ndarray]]] = defaultdict(list)
+    profile_genders: Dict[str, str] = {}
+
+    for path in embeddings_list:
+        variant_name = path.stem
+        base_name = re.sub(r"_(\d+)$", "", variant_name)
         try:
-            # Load the stored embedding
-            db_emb = np.load(p)
-            
-            # Look for a gender label file associated with this profile
-            gender_file = VOICE_DB_PROCESSED_DIR / f"{name}_gender.txt"
-            profile_gender = 'unknown'
-            
-            # If the gender file exists, read the gender
-            if gender_file.exists():
-                with open(gender_file, 'r') as f:
-                    profile_gender = f.read().strip().lower()
-            else:
-                # Don't try to determine gender from audio - this is CPU intensive
-                # Instead, just use 'unknown' and let the user manually set it if needed
-                profile_gender = 'unknown'
-                # Save the unknown gender to avoid recalculating next time
-                with open(gender_file, 'w') as f:
-                    f.write(profile_gender)
-            
-            profile_genders[name] = profile_gender
-            
-            # Just use cosine similarity - much faster and almost as effective
-            cosine_sim = cosine_similarity(test_emb, db_emb)
-            
-            # Use this directly as our similarity score
-            combined_sim = cosine_sim
-            
-            # Store all scores
-            scores.append((name, combined_sim))
-            print(f"  - {name}: similarity {combined_sim:.3f} [Gender: {profile_gender}]")
-            
-            # Apply gender filtering: if both genders are known and don't match,
-            # don't include in gender-filtered scores
-            if (current_speaker_gender != 'unknown' and profile_gender != 'unknown' and
-                current_speaker_gender != profile_gender):
-                print(f"    Gender mismatch: {current_speaker_gender} vs {profile_gender}")
-            else:
-                gender_filtered_scores.append((name, combined_sim))
-                
-        except Exception as e:
-            print(f"Error processing {name}: {e}")
-    
-    # Sort by similarity (highest first)
-    scores.sort(key=lambda x: x[1], reverse=True)
-    
-    # Also sort gender-filtered scores
-    gender_filtered_scores.sort(key=lambda x: x[1], reverse=True)
-    
-    # If no valid scores
+            stored = np.load(path)
+            vector = np.asarray(stored, dtype=np.float32).reshape(-1)
+            if vector.shape != test_emb.shape:
+                print(
+                    f"  - {variant_name}: incompatible embedding dimensions ({vector.size} != {test_emb.size}). "
+                    "Please re-enroll this profile to use the new recognizer."
+                )
+                continue
+            grouped_embeddings[base_name].append((variant_name, vector))
+        except Exception as exc:
+            print(f"Error processing {variant_name}: {exc}")
+
+    if not grouped_embeddings:
+        print("No valid voice profiles found.")
+        return None, 0, processed_path
+
+    for base_name in grouped_embeddings.keys():
+        gender_file = VOICE_DB_PROCESSED_DIR / f"{base_name}_gender.txt"
+        profile_gender = "unknown"
+        if gender_file.exists():
+            try:
+                profile_gender = gender_file.read_text().strip().lower()
+            except Exception:
+                profile_gender = "unknown"
+        profile_genders[base_name] = profile_gender
+
+    print(f"Comparing against {len(grouped_embeddings)} enrolled speaker(s)...")
+
+    scores: List[Dict[str, Any]] = []
+    for base_name, variants in grouped_embeddings.items():
+        if not variants:
+            continue
+
+        variant_scores = []
+        for variant_name, vector in variants:
+            sim = cosine_similarity(test_emb, vector)
+            variant_scores.append((sim, variant_name))
+
+        variant_scores.sort(key=lambda item: item[0], reverse=True)
+        best_score, best_variant = variant_scores[0]
+        avg_score = float(sum(score for score, _ in variant_scores) / len(variant_scores))
+        support_count = sum(
+            1 for score, _ in variant_scores
+            if (best_score - score) <= SPEAKER_VARIANT_SUPPORT_WINDOW
+        )
+        bonus = 0.0
+        if support_count > 1:
+            bonus = min(
+                SPEAKER_VARIANT_SUPPORT_MAX,
+                (support_count - 1) * SPEAKER_VARIANT_SUPPORT_STEP,
+            )
+        avg_contrib = (avg_score * SPEAKER_SCORE_AVG_WEIGHT) + SPEAKER_SCORE_AVG_BIAS
+        avg_path = min(0.999, (best_score * 0.55) + avg_contrib)
+        gain_path = (best_score * SPEAKER_SCORE_GAIN) + SPEAKER_SCORE_OFFSET
+        boost_candidates = [best_score, gain_path, avg_path]
+        boosted_core = max(boost_candidates)
+        applied_boost = max(0.0, boosted_core - best_score)
+        final_score = float(min(0.999, boosted_core + bonus))
+
+        top_variants = ", ".join(
+            f"{variant}:{score:.3f}" for score, variant in variant_scores[:3]
+        )
+        note_parts: List[str] = []
+        if bonus > 0:
+            note_parts.append(f"+{bonus:.3f} bonus")
+        if applied_boost > 1e-4:
+            note_parts.append(f"+{applied_boost:.3f} gain")
+        avg_lift = max(0.0, avg_path - best_score)
+        if boosted_core == avg_path and avg_lift > 1e-4:
+            note_parts.append("avg support boost")
+        detail_suffix = f" ({', '.join(note_parts)})" if note_parts else ""
+        print(
+            f"  - {base_name}: best {best_score:.3f} via {best_variant}{detail_suffix}; "
+            f"final={final_score:.3f}; avg={avg_score:.3f}; variants[{len(variant_scores)}]={top_variants} "
+            f"[Gender: {profile_genders.get(base_name, 'unknown')}]"
+        )
+
+        scores.append(
+            {
+                "name": base_name,
+                "score": final_score,
+                "best_score": best_score,
+                "best_variant": best_variant,
+                "avg_score": avg_score,
+                "gender": profile_genders.get(base_name, "unknown"),
+                "support_count": support_count,
+                "bonus": bonus,
+                "boost": applied_boost,
+                "variant_scores": variant_scores,
+            }
+        )
+
     if not scores:
         print("No valid voice profiles found.")
         return None, 0, processed_path
-    
-    # Choose whether to use gender-filtered or all scores
-    if gender_filtered_scores and current_speaker_gender != 'unknown':
-        print(f"Using gender-filtered results ({len(gender_filtered_scores)} profiles)")
-        final_scores = gender_filtered_scores
+
+    scores.sort(key=lambda entry: entry["score"], reverse=True)
+
+    if current_speaker_gender != "unknown":
+        gender_filtered = [
+            entry
+            for entry in scores
+            if entry["gender"] in (current_speaker_gender, "unknown")
+        ]
+    else:
+        gender_filtered = scores
+
+    if gender_filtered and current_speaker_gender != "unknown":
+        print(f"Using gender-filtered results ({len(gender_filtered)} profiles)")
+        final_scores = gender_filtered
     else:
         print("Using all results (gender filtering inactive)")
         final_scores = scores
-    
-    # If no valid filtered scores
+
     if not final_scores:
         print("No gender-matching voice profiles found.")
         return None, 0, processed_path
-    
-    # Get best match and check for close scores
-    best_name, best_score = final_scores[0]
-    
-    # Check if there are multiple close matches (potential confusion)
+
+    best_entry = final_scores[0]
+    enrolled_count = len(grouped_embeddings)
+    effective_threshold = SIMILARITY_THRESHOLD
+    if enrolled_count == 1:
+        relaxed = max(0.40, SIMILARITY_THRESHOLD - SPEAKER_SOLO_THRESHOLD_RELAX)
+        if relaxed < effective_threshold:
+            effective_threshold = relaxed
+            print(
+                f"Adjusting verification threshold to {effective_threshold:.3f} "
+                "(single enrolled speaker)"
+            )
+    elif best_entry.get("support_count", 0) >= 3:
+        relaxed = max(0.45, SIMILARITY_THRESHOLD - (SPEAKER_SOLO_THRESHOLD_RELAX * 0.5))
+        if relaxed < effective_threshold:
+            effective_threshold = relaxed
+            print(
+                f"Adjusting verification threshold to {effective_threshold:.3f} "
+                "(strong multi-segment agreement)"
+            )
+
     confusion_warning = ""
     if len(final_scores) > 1:
-        second_name, second_score = final_scores[1]
-        score_diff = best_score - second_score
-        if score_diff < 0.1:  # Very close match, potential confusion
-            confusion_warning = f" (Warning: Close match with {second_name}: {second_score:.3f}, diff: {score_diff:.3f})"
-    
-    print(f"\nBest match: {best_name} (similarity {best_score:.3f}, gender: {profile_genders.get(best_name, 'unknown')}){confusion_warning}")
-    
-    # Apply threshold (slight adjustment from original)
-    if best_score >= SIMILARITY_THRESHOLD:
-        print(f"Authentication successful! ({best_score:.3f} >= {SIMILARITY_THRESHOLD})")
-        return best_name, best_score, processed_path
-    else:
-        print(f"Authentication failed. Score {best_score:.3f} below threshold {SIMILARITY_THRESHOLD}")
-        return None, best_score, processed_path
+        second_entry = final_scores[1]
+        score_diff = best_entry["score"] - second_entry["score"]
+        if score_diff < SPEAKER_MIN_SCORE_GAP:
+            confusion_warning = (
+                f" (Warning: Close match with {second_entry['name']}: "
+                f"{second_entry['score']:.3f}, diff: {score_diff:.3f})"
+            )
+
+    print(
+        f"\nBest match: {best_entry['name']} "
+        f"(similarity {best_entry['score']:.3f}, gender: {best_entry['gender']})"
+        f"{confusion_warning}"
+    )
+
+    if best_entry["score"] >= effective_threshold:
+        if len(final_scores) > 1 and (
+            best_entry["score"] - final_scores[1]["score"]
+        ) < SPEAKER_MIN_SCORE_GAP:
+            print(
+                "Authentication rejected: score gap "
+                f"{(best_entry['score'] - final_scores[1]['score']):.3f} < "
+                f"{SPEAKER_MIN_SCORE_GAP:.3f}"
+            )
+            return None, best_entry["score"], processed_path
+        print(
+            f"Authentication successful! ({best_entry['score']:.3f} >= {effective_threshold:.3f})"
+        )
+        return best_entry["name"], best_entry["score"], processed_path
+
+    print(
+        f"Authentication failed. Score {best_entry['score']:.3f} "
+        f"below threshold {effective_threshold:.3f}"
+    )
+    return None, best_entry["score"], processed_path
         
 # Additional language models for better transcription quality
 LANGUAGE_CODES = {
@@ -1531,7 +2754,7 @@ LANGUAGE_CODES = {
     'tl': 'tagalog'
 }
 
-def transcribe_command_audio(audio_path, language=None):
+def transcribe_command_audio(audio_path, language=None, fast_mode=FAST_TRANSCRIPTION_ENABLED):
     """
     Transcribe audio command using Whisper tiny model directly.
     Optimized for command recognition with language-specific processing.
@@ -1542,34 +2765,96 @@ def transcribe_command_audio(audio_path, language=None):
                   If None, auto-detection will be used
                   
     Returns:
-        Transcribed text from the audio
+        Tuple[str, bool, Dict[str, Any]]: (transcription, success flag, diagnostics)
     """
-    # Load the Whisper tiny model pipeline if not already loaded
+    diagnostics: Dict[str, Any] = {
+        "language": language or "auto",
+        "fast_mode": bool(fast_mode),
+        "audio_path": str(audio_path) if audio_path else None,
+    }
+
     pipeline = load_local_stt_pipeline()
     if pipeline is None:
         print("Error: Could not load Whisper tiny model pipeline.")
-        return ""
-    
-    # Preprocess audio for better command recognition
-    audio_processed = preprocess_and_noise_reduce(audio_path)
-    
-    # Configure transcription options
+        diagnostics.update({"error": "pipeline_unavailable"})
+        return "", False, diagnostics
+
+    loaded = _load_audio_16k(audio_path)
+    if loaded is None:
+        diagnostics.update({"error": "audio_load_failed"})
+        return "", False, diagnostics
+
+    audio_data, sample_rate = loaded
+    diagnostics.update({
+        "input_duration_s": round(float(audio_data.size) / float(sample_rate), 3) if sample_rate else None,
+        "sample_rate": int(sample_rate) if sample_rate else None,
+    })
+
+    trimmed = None
+    gated = None
+    if fast_mode:
+        trimmed = trim_audio_to_speech(audio_data, sample_rate)
+        diagnostics["trim_applied"] = bool(trimmed.size and trimmed.size != audio_data.size)
+        working = trimmed if trimmed is not None and trimmed.size > 0 else audio_data
+        blend = float(max(0.0, min(1.0, STT_NOISE_REDUCTION_BLEND)))
+        if blend > 0.0:
+            working = apply_subtle_noise_reduction(working, sample_rate, blend)
+        gated = fast_noise_gate(working, sample_rate)
+        diagnostics["noise_gate_applied"] = True
+        audio_processed = _normalize_audio_level(gated if gated is not None and gated.size > 0 else working)
+    else:
+        audio_processed = preprocess_and_noise_reduce(audio_path)
+        diagnostics["trim_applied"] = False
+        if audio_processed is None or len(audio_processed) == 0:
+            trimmed = trim_audio_to_speech(audio_data, sample_rate)
+            diagnostics["trim_applied"] = bool(trimmed.size and trimmed.size != audio_data.size)
+            working = trimmed if trimmed is not None and trimmed.size > 0 else audio_data
+            blend = float(max(0.0, min(1.0, STT_NOISE_REDUCTION_BLEND)))
+            if blend > 0.0:
+                working = apply_subtle_noise_reduction(working, sample_rate, blend)
+            gated = fast_noise_gate(working, sample_rate)
+            diagnostics["noise_gate_applied"] = True
+            audio_processed = _normalize_audio_level(gated if gated is not None and gated.size > 0 else working)
+        else:
+            diagnostics["noise_gate_applied"] = False
+
+    if "noise_gate_applied" not in diagnostics:
+        diagnostics["noise_gate_applied"] = bool(gated is not None)
+
+    if audio_processed is None:
+        diagnostics.update({"error": "audio_preprocess_failed"})
+        return "", False, diagnostics
+
+    if audio_processed.ndim > 1:
+        audio_processed = audio_processed.flatten()
+    max_samples = sample_rate * 12
+    if audio_processed.size > max_samples:
+        audio_processed = audio_processed[:max_samples]
+        diagnostics["clipped_seconds"] = round(float(max_samples) / float(sample_rate), 3)
+
+    audio_processed = np.ascontiguousarray(audio_processed, dtype=np.float32)
+    diagnostics["processed_duration_s"] = round(float(audio_processed.size) / float(sample_rate), 3)
+
     generate_kwargs = {"task": "transcribe"}
     if language:
         generate_kwargs["language"] = language
-    
-    # Transcribe with Whisper tiny
+    diagnostics["generate_kwargs"] = dict(generate_kwargs)
+
     try:
         start_time = time.time()
         result = pipeline(audio_processed, generate_kwargs=generate_kwargs)
-        transcription = result["text"].strip()
         elapsed = time.time() - start_time
-        
+        transcription = result.get("text", "").strip()
+        diagnostics.update({
+            "inference_seconds": round(elapsed, 3),
+            "transcription_length": len(transcription),
+        })
         print(f"Whisper tiny transcription: '{transcription}' ({elapsed:.2f}s)")
-        return transcription
+        return transcription, True, diagnostics
     except Exception as e:
+        diagnostics.update({"error": str(e)})
         print(f"Error transcribing command audio: {e}")
-        return ""
+        return "", False, diagnostics
 
 # --- Command Processing Functions ---
 
@@ -1694,297 +2979,336 @@ def detect_language(text):
     # Default to English if no other language detected
     return 'en'
 
-def transcribe_command_audio(audio_path, language=None):
-    """
-    Transcribe audio command using Whisper tiny model directly.
-    Optimized for command recognition with language-specific processing.
-    
-    Args:
-        audio_path: Path to the audio file
-        language: Optional language code to force a specific language
-                  If None, auto-detection will be used
-                  
-    Returns:
-        Transcribed text from the audio
-    """
-    # Load the Whisper tiny model pipeline if not already loaded
-    pipeline = load_local_stt_pipeline()
-    if pipeline is None:
-        print("Error: Could not load Whisper tiny model pipeline.")
-        return ""
-    
-    # Preprocess audio for better command recognition
-    audio_processed = preprocess_and_noise_reduce(audio_path)
-    
-    # Configure transcription options
-    generate_kwargs = {"task": "transcribe"}
-    if language:
-        generate_kwargs["language"] = language
-    
-    # Transcribe with Whisper tiny
-    try:
-        start_time = time.time()
-        result = pipeline(audio_processed, generate_kwargs=generate_kwargs)
-        transcription = result["text"].strip()
-        elapsed = time.time() - start_time
-        
-        print(f"Whisper tiny transcription: '{transcription}' ({elapsed:.2f}s)")
-        return transcription
-    except Exception as e:
-        print(f"Error transcribing command audio: {e}")
-        return ""
+
+@lru_cache(maxsize=4096)
+def _language_for_phrase(phrase: str) -> str:
+    """Cache language guesses for command variants to aid scoring."""
+    if not phrase:
+        return "unknown"
+    detected = detect_language(phrase.lower())
+    return detected or "unknown"
+
 
 def match_command(transcribed_text):
-    """
-    Match transcribed text to the closest wheelchair command.
-    Enhanced to handle multilingual inputs and partial command matches.
-    Implements improved fuzzy matching for better cross-language recognition.
-    Returns tuple of (matched_command, confidence_score)
-    """
+    """Match transcription to a wheelchair command using language-aware highest scores."""
     if not transcribed_text:
-        return None, 0
-    
-    # Convert to lowercase, strip spaces and remove punctuation
+        return None, 0.0
+
     import re
-    text = transcribed_text.lower().strip()
-    text = re.sub(r'[.!?,;:।]', '', text)  # Remove common punctuation (includes Devanagari danda)
-    
-    # Detect the language to prioritize appropriate command variations
+    import difflib
+
+    original_text = transcribed_text.lower().strip()
+    text = re.sub(r"[.!?,;:।]", "", original_text)
+
+    vote_totals: Dict[str, float] = defaultdict(float)
+    vote_counts: Dict[str, int] = defaultdict(int)
+    vote_details: Dict[str, List[Tuple[float, str, str]]] = defaultdict(list)
+    best_single_match: Optional[str] = None
+    best_single_detail: Optional[Tuple[float, str, str]] = None
+    best_single_score = 0.0
+
+    def record_vote(command: str, score: float, reason: str, language_hint: str = "unknown") -> None:
+        nonlocal best_single_match, best_single_score, best_single_detail
+        score = float(max(0.0, min(1.0, score)))
+        if score == 0.0 or not command:
+            return
+        vote_totals[command] += score
+        vote_counts[command] += 1
+        vote_details[command].append((score, reason, language_hint))
+        if score > best_single_score:
+            best_single_score = score
+            best_single_match = command
+            best_single_detail = (score, reason, language_hint)
+        lang_note = f" | lang={language_hint}" if language_hint not in {"unknown", ""} else ""
+        print(
+            f"Evidence -> {command}: +{score:.2f} ({reason}){lang_note}; "
+            f"total={vote_totals[command]:.2f}; count={vote_counts[command]}"
+        )
+
+    phrase_match = _apply_phrase_replacements(text)
+    if phrase_match:
+        command, conf = phrase_match
+        record_vote(command, conf, "canonical phrase", language_hint="en")
+
+    words = [w for w in text.split() if w]
+    normalized_words = _normalize_command_tokens(words)
+    if normalized_words:
+        text = " ".join(normalized_words)
+        words = normalized_words
+    else:
+        words = [w for w in text.split() if w]
+
     detected_language = detect_language(text)
     print(f"Detected language: {detected_language}")
-    
-    # Language-specific processing to improve matching
-    if detected_language in ['hi', 'mr', 'en']:  # Apply Hindi detector to English and Marathi too
-        # Run specialized Hindi direction detection (works for Hindi, Hinglish, Romanized Hindi)
+
+    if detected_language in ["hi", "mr", "en"]:
         hindi_result = hindi_direction_detector(text)
         if hindi_result:
             print(f"Hindi direction detector found: {hindi_result}")
-            return hindi_result, 0.95
-            
-    # Check specifically for rotation commands with ghumo/taraf/mudo patterns
-    if any(word in text for word in ['ghum', 'ghumo', 'mudo', 'mud', 'gumo', 'rotate', 'spin', 'turn', 'circle']):
-        if any(word in text for word in ['dai', 'daye', 'daaye', 'daayen', 'dayen', 'right']):
-            return "rotate_right", 0.90
-        elif any(word in text for word in ['bai', 'baye', 'baaye', 'baayen', 'bayen', 'left']):
-            return "rotate_left", 0.90
-        
-    # Check for taraf (direction) with left/right indicators
-    if 'taraf' in text:
-        if any(word in text for word in ['dai', 'daye', 'daaye', 'daayen', 'dayen', 'right']):
-            return "right", 0.85
-        elif any(word in text for word in ['bai', 'baye', 'baaye', 'baayen', 'bayen', 'left']):
-            return "left", 0.85
-    
-    # Try exact match first (highest confidence)
+            record_vote(hindi_result, 0.95, "Hindi direction detector", language_hint="hi")
+
+    rotation_tokens_hindi = {"ghum", "ghumo", "ghoom", "ghumao", "gumo"}
+    rotation_tokens_english = {"rotate", "spin", "circle", "loop", "around"}
+    if any(word in text for word in rotation_tokens_hindi.union(rotation_tokens_english)):
+        if any(word in text for word in ["dai", "daye", "daaye", "daayen", "dayen", "right"]):
+            if any(word in text for word in rotation_tokens_hindi):
+                lang_hint = "hi"
+            elif any(word in text for word in rotation_tokens_english):
+                lang_hint = "en"
+            else:
+                lang_hint = "unknown"
+            record_vote("rotate_right", 0.90, "rotation keyword -> right", language_hint=lang_hint)
+        if any(word in text for word in ["bai", "baye", "baaye", "baayen", "bayen", "left"]):
+            if any(word in text for word in rotation_tokens_hindi):
+                lang_hint = "hi"
+            elif any(word in text for word in rotation_tokens_english):
+                lang_hint = "en"
+            else:
+                lang_hint = "unknown"
+            record_vote("rotate_left", 0.90, "rotation keyword -> left", language_hint=lang_hint)
+
+    if "taraf" in text:
+        if any(word in text for word in ["dai", "daye", "daaye", "daayen", "dayen", "right"]):
+            record_vote("right", 0.85, "taraf + right indicator", language_hint="hi")
+        if any(word in text for word in ["bai", "baye", "baaye", "baayen", "bayen", "left"]):
+            record_vote("left", 0.85, "taraf + left indicator", language_hint="hi")
+
     for cmd, variations in WHEELCHAIR_COMMANDS.items():
-        if text in variations:
+        if text in [v.lower() for v in variations]:
             print(f"Found exact match: '{text}' -> {cmd}")
             return cmd, 1.0
-    
-    # Check if the full text contains any of our command variations
-    # This helps with commands embedded in longer phrases
-    for cmd, variations in WHEELCHAIR_COMMANDS.items():
-        for variation in variations:
-            if variation in text and len(variation) > 3:  # Only match substantial variations
-                # The longer the match, the higher the confidence
-                confidence = min(0.95, len(variation) / len(text) * 1.2)  # Cap at 0.95
-                print(f"Found command '{variation}' in '{text}' -> {cmd} (confidence: {confidence:.2f})")
-                return cmd, confidence
-    
-    # If no embedded match, use fuzzy matching with word-by-word approach
-    best_match = None
-    best_score = 0
-    
-    # SPECIAL CASE: Check for specific problematic Hindi pattern first
-    # This is for the "पूरा दाय मुडव" (poora daaye mudo) case
-    if "पूरा" in text and "दाय" in text and ("मुड" in text or "mud" in text):
-        print(f"Detected special case 'पूरा दाय मुडव' pattern - this is RIGHT direction")
-        return "right", 0.95
-    
-    # Split input into words to handle commands embedded in sentences
-    words = text.split()
-    
-    # Enhanced phonetic mapping for commonly misrecognized words across languages
-    phonetic_variants = {
-        # Hindi/English transliteration variants - Left
-        'bye': ['baaye', 'baye', 'by', 'bai', 'bay', 'buy'],
-        'bay': ['baaye', 'baye', 'bai', 'by', 'buy'],
-        'buy': ['baaye', 'baye', 'bai', 'by', 'bay'],
-        'bai': ['baaye', 'baye', 'bay', 'by', 'buy'],
-        'left': ['lift', 'laft', 'lft', 'lef'],
-        
-        # Hindi/English transliteration variants - Right
-        'day': ['daaye', 'daye', 'dai', 'dye', 'die', 'दाय', 'दाएं', 'दाई'],
-        'die': ['daaye', 'daye', 'dai', 'day', 'dye', 'दाय', 'दाएं'],
-        'dai': ['daaye', 'daye', 'die', 'day', 'dye', 'दाय', 'दाएं'],
-        'दाय': ['right', 'daaye', 'daye', 'dai', 'day'],  # Direct mapping for the problematic word
-        'right': ['rite', 'ryt', 'rit', 'rght', 'wright'],
-        
-        # Hindi/English transliteration variants - Turn
-        'mude': ['mudo', 'mudna', 'mudho', 'mode', 'mood', 'move', 'मुडव', 'मुडो', 'मुड़ो'],
-        'mode': ['mudo', 'mudna', 'mude', 'mood', 'move', 'मुडव', 'मुडो'],
-        'mude.': ['mudo', 'mudna', 'mode', 'mood', 'move', 'मुडव'],
-        'mood': ['mudo', 'mudna', 'mode', 'mude', 'move', 'मुडव'],
-        'move': ['mudo', 'mudna', 'mode', 'mude', 'mood', 'मुडव'],
-        'मुडव': ['mudo', 'turn', 'mudna', 'मुड़ो', 'मुडो'],  # Direct mapping for the problematic word
-        
-        # Hindi/English transliteration variants - Stop
-        'ruko': ['rukho', 'rukna', 'rukko', 'roko', 'roku', 'rocco'],
-        'stop': ['stp', 'stahp', 'stoop', 'hault', 'holt'],
-        
-        # Hindi/English transliteration variants - Forward/Go
-        'chalo': ['challo', 'chal', 'chalu', 'challu', 'cello'],
-        'karo': ['kro', 'karro', 'karho', 'kero', 'kiro']
+
+    rotation_hint_keywords = {
+        "ghoom",
+        "ghum",
+        "ghumo",
+        "ghumao",
+        "घूम",
+        "घूमो",
+        "घुमाव",
+        "घुमाओ",
+        "spin",
+        "rotate",
+        "rotation",
+        "circle",
+        "loop",
+        "around",
+        "pura",
+        "पूरा",
+        "पूर्ण",
+        "full turn",
+        "turn around",
+        "360",
     }
-    
-    # Create phonetically expanded version of the input text
-    expanded_words = list(words)  # Start with original words
-    
-    # Add phonetic variants to expanded_words
-    for i, word in enumerate(words):
-        # Check if this word has phonetic variants
+    rotation_hints_present = any(keyword in text for keyword in rotation_hint_keywords)
+
+    for cmd, variations in WHEELCHAIR_COMMANDS.items():
+        rotation_command = cmd.startswith("rotate_")
+        allow_rotation_scoring = rotation_hints_present if rotation_command else True
+        for variation in variations:
+            variation_lower = variation.lower()
+            variation_language = _language_for_phrase(variation_lower)
+            if variation_lower in text and len(variation_lower) > 3:
+                if allow_rotation_scoring:
+                    confidence = min(0.95, len(variation_lower) / max(1, len(text)) * 1.2)
+                    record_vote(cmd, confidence, f"embedded phrase '{variation}'", language_hint=variation_language)
+
+    if "पूरा" in text and "दाय" in text and ("मुड" in text or "mud" in text):
+        record_vote("right", 0.95, "special पूर pattern", language_hint="hi")
+
+    words = text.split()
+
+    phonetic_variants = {
+        "bye": ["baaye", "baye", "by", "bai", "bay", "buy"],
+        "bay": ["baaye", "baye", "bai", "by", "buy"],
+        "buy": ["baaye", "baye", "bai", "by", "bay"],
+        "bai": ["baaye", "baye", "bay", "by", "buy"],
+        "left": ["lift", "laft", "lft", "lef"],
+        "veer": ["vir", "beer", "veer"],
+        "rotate": ["rotation", "rote", "rotee", "roate"],
+        "spin": ["spin", "spain", "speen"],
+        "day": ["daaye", "daye", "dai", "dye", "die", "दाय", "दाएं", "दाई"],
+        "die": ["daaye", "daye", "dai", "day", "dye", "दाय", "दाएं"],
+        "dai": ["daaye", "daye", "die", "day", "dye", "दाय", "दाएं"],
+        "दाय": ["right", "daaye", "daye", "dai", "day"],
+        "right": ["rite", "ryt", "rit", "rght", "wright"],
+        "mude": ["mudo", "mudna", "mudho", "mode", "mood", "move", "मुडव", "मुडो", "मुड़ो"],
+        "mode": ["mudo", "mudna", "mude", "mood", "move", "मुडव", "मुडो"],
+        "mude.": ["mudo", "mudna", "mode", "mood", "move", "मुडव"],
+        "mood": ["mudo", "mudna", "mode", "mude", "move", "मुडव"],
+        "move": ["mudo", "mudna", "mode", "mude", "mood", "मुडव"],
+        "मुडव": ["mudo", "turn", "mudna", "मुड़ो", "मुडो"],
+        "ruko": ["rukho", "rukna", "rukko", "roko", "roku", "rocco"],
+        "stop": ["stp", "stahp", "stoop", "hault", "holt"],
+        "chalo": ["challo", "chal", "chalu", "challu", "cello"],
+        "karo": ["kro", "karro", "karho", "kero", "kiro"],
+    }
+
+    expanded_words = list(words)
+    for word in words:
         for original, variants in phonetic_variants.items():
             if word == original or word.startswith(original):
                 expanded_words.extend(variants)
-            # Also check reverse mapping (e.g., if input contains 'baaye' but command uses 'left')
             if word in variants:
                 expanded_words.append(original)
-    
-    # Remove duplicates but preserve order
     expanded_words = list(dict.fromkeys(expanded_words))
     print(f"Expanded word list: {expanded_words}")
-    
-    # Check for specific language command patterns
-    # These are common command patterns across languages that should get special handling
+
     command_patterns = [
-        # Hindi command patterns
-        {"pattern": ["baaye", "baye", "by", "bye"], "command": "left", "score": 0.85},
-        {"pattern": ["daaye", "daye", "day", "die"], "command": "right", "score": 0.85},
-        {"pattern": ["aage", "seedhe", "forward"], "command": "forward", "score": 0.85},
-        {"pattern": ["peeche", "back", "vaapas"], "command": "backward", "score": 0.85},
-        {"pattern": ["ruko", "stop", "thehro"], "command": "stop", "score": 0.85},
-        {"pattern": ["chalo", "shuru", "start"], "command": "start", "score": 0.85},
-        
-        # Multi-word Hindi patterns
-        {"pattern": ["baaye", "mudo"], "command": "left", "score": 0.95, "multi_word": True},
-        {"pattern": ["daaye", "mudo"], "command": "right", "score": 0.95, "multi_word": True},
-        {"pattern": ["left", "mudo"], "command": "left", "score": 0.90, "multi_word": True},
-        {"pattern": ["right", "mudo"], "command": "right", "score": 0.90, "multi_word": True}
+        {"pattern": ["baaye", "baye", "by", "bye"], "command": "left", "score": 0.85, "language": "hi"},
+        {"pattern": ["daaye", "daye", "day", "die"], "command": "right", "score": 0.85, "language": "hi"},
+        {"pattern": ["aage", "seedhe", "forward"], "command": "forward", "score": 0.85, "language": "hi"},
+        {"pattern": ["peeche", "back", "vaapas"], "command": "backward", "score": 0.85, "language": "hi"},
+        {"pattern": ["ruko", "stop", "thehro"], "command": "stop", "score": 0.85, "language": "hi"},
+        {"pattern": ["chalo", "shuru", "start"], "command": "start", "score": 0.85, "language": "hi"},
+        {"pattern": ["baaye", "mudo"], "command": "left", "score": 0.95, "multi_word": True, "language": "hi"},
+        {"pattern": ["daaye", "mudo"], "command": "right", "score": 0.95, "multi_word": True, "language": "hi"},
+        {"pattern": ["left", "mudo"], "command": "left", "score": 0.90, "multi_word": True, "language": "en"},
+        {"pattern": ["right", "mudo"], "command": "right", "score": 0.90, "multi_word": True, "language": "en"},
+        {"pattern": ["spin", "left"], "command": "rotate_left", "score": 0.90, "multi_word": True, "language": "en"},
+        {"pattern": ["spin", "right"], "command": "rotate_right", "score": 0.90, "multi_word": True, "language": "en"},
+        {"pattern": ["rotate", "left"], "command": "rotate_left", "score": 0.90, "multi_word": True, "language": "en"},
+        {"pattern": ["rotate", "right"], "command": "rotate_right", "score": 0.90, "multi_word": True, "language": "en"},
+        {"pattern": ["veer", "left"], "command": "left", "score": 0.88, "multi_word": True, "language": "en"},
+        {"pattern": ["veer", "right"], "command": "right", "score": 0.88, "multi_word": True, "language": "en"},
     ]
-    
-    # Process single-word and multi-word patterns
+
     for pattern_def in command_patterns:
         pattern_words = pattern_def["pattern"]
         multi_word = pattern_def.get("multi_word", False)
-        
+        cmd = pattern_def["command"]
+        base_score = pattern_def["score"]
+        lang_hint = pattern_def.get("language", "unknown")
+
         if multi_word and len(words) >= 2:
-            # For multi-word patterns, check if all pattern words appear in the expanded words
-            matches_all = True
-            for pattern_word in pattern_words:
-                if not any(pattern_word in w for w in expanded_words):
-                    matches_all = False
-                    break
-                    
-            # Check special combinations like "bye mude", "baaye mudo", etc.
-            if matches_all or any(w1 + " " + w2 in text for w1 in ["bye", "by", "bay", "baaye"] for w2 in ["mude", "mode", "mudo"]):
-                if "left" in pattern_def["command"]:
-                    if pattern_def["score"] > best_score:
-                        best_score = pattern_def["score"]
-                        best_match = pattern_def["command"]
-                        print(f"Matched multi-word pattern for '{pattern_def['command']}' with score {best_score}")
-            
-            # Check right-turn combinations
-            if matches_all or any(w1 + " " + w2 in text for w1 in ["die", "day", "daaye"] for w2 in ["mude", "mode", "mudo"]):
-                if "right" in pattern_def["command"]:
-                    if pattern_def["score"] > best_score:
-                        best_score = pattern_def["score"]
-                        best_match = pattern_def["command"] 
-                        print(f"Matched multi-word pattern for '{pattern_def['command']}' with score {best_score}")
+            matches_all = all(
+                any(pattern_word in word for word in expanded_words)
+                for pattern_word in pattern_words
+            )
+
+            if "left" in cmd:
+                special_combo = any(
+                    f"{w1} {w2}" in text
+                    for w1 in ["bye", "by", "bay", "baaye"]
+                    for w2 in ["mude", "mode", "mudo"]
+                )
+                if matches_all or special_combo:
+                    record_vote(cmd, base_score, "multi-word pattern match", language_hint=lang_hint)
+
+            if "right" in cmd:
+                special_combo = any(
+                    f"{w1} {w2}" in text
+                    for w1 in ["die", "day", "daaye"]
+                    for w2 in ["mude", "mode", "mudo"]
+                )
+                if matches_all or special_combo:
+                    record_vote(cmd, base_score, "multi-word pattern match", language_hint=lang_hint)
         else:
-            # For single-word patterns, check if any pattern word is in the expanded words
             for pattern_word in pattern_words:
-                for word in expanded_words:
-                    if pattern_word == word:
-                        if pattern_def["score"] > best_score:
-                            best_score = pattern_def["score"]
-                            best_match = pattern_def["command"]
-                            print(f"Matched single-word pattern '{pattern_word}' for '{pattern_def['command']}' with score {best_score}")
-    
-    # Traditional fuzzy matching as a fallback
-    import difflib
+                if pattern_word in expanded_words:
+                    record_vote(cmd, base_score, f"pattern word '{pattern_word}'", language_hint=lang_hint)
+                    break
+
     for cmd, variations in WHEELCHAIR_COMMANDS.items():
+        rotation_command = cmd.startswith("rotate_")
+        allow_rotation_scoring = rotation_hints_present if rotation_command else True
         for variation in variations:
-            # Only consider substantive variations to avoid false positives
-            if len(variation) < 3:  # Skip very short variations
+            if len(variation) < 3:
                 continue
-                
-            # Use both traditional sequence matcher and word overlap approaches
-            
-            # 1. Exact word match in expanded list (highest confidence)
+
+            variation_language = _language_for_phrase(variation)
             variation_words = variation.split()
             for v_word in variation_words:
-                if len(v_word) > 2 and v_word in expanded_words:  # Only meaningful words
-                    word_match_score = 0.82  # High confidence for exact word matches
-                    if word_match_score > best_score:
-                        best_score = word_match_score
-                        best_match = cmd
-                        print(f"Word match: '{v_word}' from '{variation}' for '{cmd}' with score {best_score}")
-            
-            # 2. Traditional sequence matcher for fuzzy string similarity
+                if len(v_word) > 2 and v_word in expanded_words:
+                    if not rotation_command or allow_rotation_scoring:
+                        record_vote(cmd, 0.82, f"word match '{v_word}'", language_hint=_language_for_phrase(v_word))
+                    break
+
             similarity = difflib.SequenceMatcher(None, text, variation).ratio()
-            
-            # 3. Boost score if the command is a substring of the input
             if variation in text:
-                similarity += 0.18  # Significant boost for embedded matches
-            
-            # 4. Word overlap measurement (proportion of command words found in input)
-            variation_words = set(variation.split())
-            expanded_text_words = set(expanded_words)
-            common_words = variation_words.intersection(expanded_text_words)
-            
-            if variation_words and common_words:  # Avoid division by zero
-                word_overlap_score = len(common_words) / len(variation_words) * 0.95  # High weight for word overlap
+                similarity += 0.18
+
+            variation_word_set = set(variation.split())
+            expanded_word_set = set(expanded_words)
+            common_words = variation_word_set.intersection(expanded_word_set)
+            if variation_word_set and common_words:
+                word_overlap_score = len(common_words) / len(variation_word_set) * 0.95
                 similarity = max(similarity, word_overlap_score)
-            
-            # Update best match if this is better
-            if similarity > best_score:
-                best_score = similarity
-                best_match = cmd
-                print(f"Fuzzy match: '{variation}' for '{cmd}' with score {best_score}")
-                
-            # Special handling for Hindi/English common commands
-            if 'mudo' in variation and ('baaye' in variation or 'daaye' in variation):
-                if any(w in text for w in ['bye', 'by', 'bay']) and any(w in text for w in ['mude', 'mode']):
-                    if 'baaye' in variation and best_score < 0.9:
-                        best_score = 0.9
-                        best_match = cmd
-                        print(f"Special Hindi match for left: {best_score}")
-                elif any(w in text for w in ['die', 'day']) and any(w in text for w in ['mude', 'mode']):
-                    if 'daaye' in variation and best_score < 0.9:
-                        best_score = 0.9
-                        best_match = cmd
-                        print(f"Special Hindi match for right: {best_score}")
-    
-    # Only return a match if similarity is above threshold
-    # Using adaptive threshold based on the match quality:
-    # - Higher threshold (0.80+) for critical commands like stop
-    # - Medium threshold (0.60) for most commands
-    # - Lower threshold (0.50) for commands with extensive phonetic variation
-    
-    # Default minimum threshold
-    min_threshold = 0.50
-    
-    # Safety-critical commands need higher confidence
-    if best_match == "stop":
-        min_threshold = 0.55  # Slightly higher for stop command
-    
-    # Debug information
-    print(f"Best match: '{best_match}' with confidence score {best_score:.2f} (threshold: {min_threshold})")
-    
-    if best_score >= min_threshold and best_match:
-        return best_match, best_score
-    
-    return None, best_score
+
+            if similarity >= 0.45 and (not rotation_command or allow_rotation_scoring):
+                record_vote(cmd, similarity, f"fuzzy match '{variation}'", language_hint=variation_language)
+
+            if "mudo" in variation and ("baaye" in variation or "daaye" in variation):
+                left_combo = any(w in text for w in ["bye", "by", "bay"]) and any(
+                    w in text for w in ["mude", "mode"]
+                )
+                right_combo = any(w in text for w in ["die", "day"]) and any(
+                    w in text for w in ["mude", "mode"]
+                )
+                if "baaye" in variation and left_combo:
+                    if not rotation_command or allow_rotation_scoring:
+                        record_vote(cmd, 0.9, "Hindi left special", language_hint="hi")
+                if "daaye" in variation and right_combo:
+                    if not rotation_command or allow_rotation_scoring:
+                        record_vote(cmd, 0.9, "Hindi right special", language_hint="hi")
+
+    if not vote_details:
+        return None, best_single_score
+
+    command_stats: Dict[str, Dict[str, Any]] = {}
+    for cmd, entries in vote_details.items():
+        scores = [score for score, _, _ in entries]
+        if not scores:
+            continue
+        best_entry = max(entries, key=lambda item: item[0])
+        command_stats[cmd] = {
+            "best": best_entry,
+            "avg": sum(scores) / len(scores),
+            "count": len(scores),
+            "total": sum(scores),
+        }
+
+    if not command_stats:
+        return None, best_single_score
+
+    global_best_cmd, global_best_data = max(
+        command_stats.items(), key=lambda item: item[1]["best"][0]
+    )
+    global_best_entry = global_best_data["best"]
+
+    print("Command score summary:")
+    for cmd, stats in sorted(
+        command_stats.items(), key=lambda item: item[1]["best"][0], reverse=True
+    ):
+        best_score, best_reason, best_lang = stats["best"]
+        lang_note = f" lang={best_lang}" if best_lang not in {"unknown", ""} else ""
+        print(
+            f"  {cmd}: best={best_score:.2f} (reason: {best_reason}){lang_note}; "
+            f"avg={stats['avg']:.2f}; votes={stats['count']}; total={stats['total']:.2f}"
+        )
+
+    if best_single_match and best_single_detail:
+        chosen_cmd = best_single_match
+        chosen_score, chosen_reason, chosen_lang = best_single_detail
+    else:
+        chosen_cmd = global_best_cmd
+        chosen_score, chosen_reason, chosen_lang = global_best_entry
+    min_threshold = 0.55 if chosen_cmd == "stop" else 0.50
+
+    lang_note = f", lang={chosen_lang}" if chosen_lang not in {"unknown", ""} else ""
+    print(
+        f"Selected command '{chosen_cmd}' with confidence {chosen_score:.2f} "
+        f"(reason: {chosen_reason}{lang_note})"
+    )
+
+    if chosen_score >= min_threshold:
+        return chosen_cmd, chosen_score
+
+    print(
+        f"Top candidate '{chosen_cmd}' below threshold {min_threshold:.2f} "
+        f"(score={chosen_score:.2f}); no command issued"
+    )
+    return None, max(best_single_score, chosen_score)
 
 def execute_command(command):
     """
@@ -2020,13 +3344,7 @@ def execute_command(command):
             sd.wait()
         except Exception as e:
             print(f"Error playing pre-generated audio: {e}")
-            # Fall back to generating TTS
-            try:
-                synthesize_speech(response, DEFAULT_LANGUAGE, DEFAULT_GENDER)
-            except Exception as e2:
-                print(f"Error generating speech: {e2}")
     else:
-        # Generate TTS on-the-fly
         print(f"No pre-generated TTS file found at {tts_file}, generating...")
         try:
             synthesize_speech(response, DEFAULT_LANGUAGE, DEFAULT_GENDER)
@@ -2557,11 +3875,13 @@ def command_control_mode(encoder):
     start_time = time.time()
     
     # Using our new direct Whisper tiny function instead of the legacy process_voice_command
-    command, confidence = process_command_with_whisper_tiny(processed_path)
+    command, confidence, transcription = process_command_with_whisper_tiny(processed_path)
     processing_time = time.time() - start_time
     
     print(f"\n[DIAGNOSTICS] Command processing completed in {processing_time:.2f} seconds")
     print(f"[DIAGNOSTICS] Command: {command or 'None'}, Confidence: {confidence:.2f}")
+    if transcription:
+        print(f"[DIAGNOSTICS] Transcription: {transcription}")
     
     # Define confidence thresholds
     EXECUTE_THRESHOLD = 0.5    # Execute command confidently
@@ -2644,6 +3964,8 @@ def ensure_directories():
     TTS_OUTPUT_DIR.mkdir(exist_ok=True)
     VOICE_DB_PROCESSED_DIR.mkdir(exist_ok=True)
     VOICE_DB_EMBEDDINGS_DIR.mkdir(exist_ok=True)
+    MODELS_DIR.mkdir(exist_ok=True)
+    OPTIMIZED_DIR.mkdir(exist_ok=True)
     
     # Clean up old temporary files to avoid disk space issues
     
@@ -2736,8 +4058,8 @@ def main():
     
     # Initialize voice encoder only when needed
     print("\nInitializing system components...")
-    print("Voice encoder will be loaded when needed.")
-    encoder = None
+    print("Speaker recognizer will be loaded when needed.")
+    speaker_model = None
     
     print("\nSystem initialized and ready.")
     print("\nAvailable wheelchair commands:")
@@ -2760,30 +4082,24 @@ def main():
         
         if choice == "1":
             # Load encoder only when needed
-            if encoder is None:
-                print("Loading voice encoder (CPU)... This may take a moment.")
+            if speaker_model is None:
+                print("Loading speaker recognizer (CPU)... This may take a moment.")
                 try:
-                    from resemblyzer import VoiceEncoder
-                    encoder = VoiceEncoder(device="cpu")
-                    print("Voice encoder loaded successfully.")
+                    speaker_model = load_speaker_recognizer()
                 except Exception as e:
-                    print(f"CRITICAL ERROR: Failed to load voice encoder: {e}")
-                    print("Please ensure resemblyzer is properly installed.")
+                    print(f"CRITICAL ERROR: Failed to load speaker recognizer: {e}")
                     continue
-            online_llm_mode(encoder)
+            online_llm_mode(speaker_model)
         elif choice == "2":
             # Load encoder only when needed
-            if encoder is None:
-                print("Loading voice encoder (CPU)... This may take a moment.")
+            if speaker_model is None:
+                print("Loading speaker recognizer (CPU)... This may take a moment.")
                 try:
-                    from resemblyzer import VoiceEncoder
-                    encoder = VoiceEncoder(device="cpu")
-                    print("Voice encoder loaded successfully.")
+                    speaker_model = load_speaker_recognizer()
                 except Exception as e:
-                    print(f"CRITICAL ERROR: Failed to load voice encoder: {e}")
-                    print("Please ensure resemblyzer is properly installed.")
+                    print(f"CRITICAL ERROR: Failed to load speaker recognizer: {e}")
                     continue
-            command_control_mode(encoder)
+            command_control_mode(speaker_model)
         elif choice == "3":
             print("\nAvailable Voice Commands (in any language):")
             # Dictionary of multilingual command examples
@@ -2847,20 +4163,17 @@ def main():
                     print("No voice profiles could be loaded.")
             elif profile_choice == "2":
                 # Load encoder only when needed
-                if encoder is None:
-                    print("Loading voice encoder (CPU)... This may take a moment.")
+                if speaker_model is None:
+                    print("Loading speaker recognizer (CPU)... This may take a moment.")
                     try:
-                        from resemblyzer import VoiceEncoder
-                        encoder = VoiceEncoder(device="cpu")
-                        print("Voice encoder loaded successfully.")
+                        speaker_model = load_speaker_recognizer()
                     except Exception as e:
-                        print(f"CRITICAL ERROR: Failed to load voice encoder: {e}")
-                        print("Please ensure resemblyzer is properly installed.")
+                        print(f"CRITICAL ERROR: Failed to load speaker recognizer: {e}")
                         input("\nPress Enter to continue...")
                         continue
-                
+
                 # Create a new voice profile
-                success = create_voice_profile_internal(encoder, VOICE_DB_PROCESSED_DIR, 
+                success = create_voice_profile_internal(speaker_model, VOICE_DB_PROCESSED_DIR, 
                                               VOICE_DB_EMBEDDINGS_DIR, SAMPLE_RATE)
                 
                 if success:
@@ -2874,20 +4187,17 @@ def main():
                 
             elif profile_choice == "3":
                 # Load encoder only when needed
-                if encoder is None:
-                    print("Loading voice encoder (CPU)... This may take a moment.")
+                if speaker_model is None:
+                    print("Loading speaker recognizer (CPU)... This may take a moment.")
                     try:
-                        from resemblyzer import VoiceEncoder
-                        encoder = VoiceEncoder(device="cpu")
-                        print("Voice encoder loaded successfully.")
+                        speaker_model = load_speaker_recognizer()
                     except Exception as e:
-                        print(f"CRITICAL ERROR: Failed to load voice encoder: {e}")
-                        print("Please ensure resemblyzer is properly installed.")
+                        print(f"CRITICAL ERROR: Failed to load speaker recognizer: {e}")
                         input("\nPress Enter to continue...")
                         continue
-                
+
                 # Test voice authentication
-                test_voice_authentication_internal(encoder)
+                test_voice_authentication_internal(speaker_model)
             elif profile_choice == "4":
                 print("\n=== Clean Voice Database ===")
                 print("WARNING: This will delete ALL voice profiles.")
@@ -2922,19 +4232,20 @@ def main():
             print("\n")
             
             # Record and process command
-            command, confidence = process_command_with_whisper_tiny(None, detect_lang=True)
+            command, confidence, transcription = process_command_with_whisper_tiny(None, detect_lang=True)
             
             if command:
                 print(f"\nRecognized command: '{command}' with confidence {confidence:.2f}")
                 
-                # Get the detected language from the last transcription
-                detected_language = detect_language(transcribe_command_audio(TEMP_DIR / f"voice_cmd_{time.strftime('%Y%m%d_%H%M%S')}.wav"))
+                detected_language = detect_language(transcription)
                 print(f"Detected language: {detected_language} ({LANGUAGE_CODES.get(detected_language, 'Unknown')})")
                 
                 # Execute command with language-specific feedback
                 execute_command_with_language_feedback(command, detected_language)
             else:
                 print("\nNo command recognized. Please try again with a clearer voice command.")
+                if transcription:
+                    print(f"Heard: {transcription}")
         elif choice == "6":
             # Test TTS voices
             test_tts_voices()
