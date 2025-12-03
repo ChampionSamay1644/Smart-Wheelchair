@@ -106,11 +106,21 @@ class ConnectionProvider extends ChangeNotifier {
             notifyListeners();
             break;
           case 'disconnected':
+            _isConnecting = false;
+            _lastError = message['message']?.toString();
+            notifyListeners();
+            break;
+          case 'reconnecting':
             _isConnecting = true;
             _lastError = message['message']?.toString();
             notifyListeners();
             break;
           case 'connection_failed':
+            _isConnecting = false;
+            _lastError = message['message']?.toString();
+            notifyListeners();
+            break;
+          case 'reconnect_exhausted':
             _isConnecting = false;
             _lastError = message['message']?.toString();
             notifyListeners();

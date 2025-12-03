@@ -24,6 +24,9 @@ noisereduce>=2.0.0
 # Raspberry Pi GPIO
 RPi.GPIO>=0.7.1
 
+# Bluetooth RFCOMM support
+pybluez>=0.30
+
 # All other dependencies from main requirements.txt
 difflib
 pydub>=0.25.1

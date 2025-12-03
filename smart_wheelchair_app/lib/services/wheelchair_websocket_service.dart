@@ -30,6 +30,8 @@ class WheelchairWebSocketService {
   bool _intentionalDisconnect = false;
   Timer? _reconnectTimer;
   final Duration _reconnectDelay = const Duration(seconds: 5);
+  final int _maxReconnectAttempts = 2;
+  int _reconnectAttempts = 0;
 
   // Session management
   String? _currentSessionId;
@@ -51,6 +53,7 @@ class WheelchairWebSocketService {
     String ipAddress,
     int port, {
     bool autoReconnect = true,
+    bool resetAttempts = true,
   }) async {
     if (_isConnected) {
       debugPrint('Already connected to WebSocket server');
@@ -61,6 +64,9 @@ class WheelchairWebSocketService {
       return false;
     }
 
+    if (resetAttempts) {
+      _reconnectAttempts = 0;
+    }
     _shouldAutoReconnect = autoReconnect;
     _intentionalDisconnect = false;
     _isConnecting = true;
@@ -99,6 +105,7 @@ class WheelchairWebSocketService {
 
       _isConnected = true;
       _isConnecting = false;
+      _reconnectAttempts = 0;
       _reconnectTimer?.cancel();
       debugPrint('✓ Connected to wheelchair control server');
       return true;
@@ -137,13 +144,37 @@ class WheelchairWebSocketService {
     if (_lastIp == null || _lastPort == null) {
       return;
     }
+    if (_reconnectAttempts >= _maxReconnectAttempts) {
+      _shouldAutoReconnect = false;
+      _isConnecting = false;
+      _messageController.add({
+        'type': 'reconnect_exhausted',
+        'message':
+            'Unable to connect after $_maxReconnectAttempts attempts. Please check the IP address and try again.',
+      });
+      return;
+    }
 
+    _reconnectAttempts += 1;
+    _isConnecting = true;
+    _messageController.add({
+      'type': 'reconnecting',
+      'attempt': _reconnectAttempts,
+      'max_attempts': _maxReconnectAttempts,
+      'message':
+          'Attempting reconnect (${_reconnectAttempts}/$_maxReconnectAttempts)...',
+    });
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(_reconnectDelay, () async {
       if (_intentionalDisconnect) {
         return;
       }
-      await connect(_lastIp!, _lastPort!, autoReconnect: _shouldAutoReconnect);
+      await connect(
+        _lastIp!,
+        _lastPort!,
+        autoReconnect: _shouldAutoReconnect,
+        resetAttempts: false,
+      );
     });
   }
 
@@ -154,6 +185,7 @@ class WheelchairWebSocketService {
       _shouldAutoReconnect = false;
     }
     _reconnectTimer?.cancel();
+    _reconnectAttempts = 0;
 
     if (_channel != null) {
       await _channel!.sink.close();
@@ -171,6 +203,7 @@ class WheelchairWebSocketService {
     _shouldAutoReconnect = enabled;
     if (!enabled) {
       _reconnectTimer?.cancel();
+      _reconnectAttempts = 0;
     }
   }
 

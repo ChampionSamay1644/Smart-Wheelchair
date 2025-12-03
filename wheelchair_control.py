@@ -66,6 +66,12 @@ except ImportError:
     librosa = None
 
 try:
+    from rapidfuzz import fuzz as rapidfuzz_fuzz, process as rapidfuzz_process
+    RAPIDFUZZ_AVAILABLE = True
+except ImportError:
+    RAPIDFUZZ_AVAILABLE = False
+
+try:
     from groq import Groq
     GROQ_AVAILABLE = True
 except ImportError:
@@ -252,7 +258,7 @@ SYSTEM_PROMPT = (
 
 SAMPLE_RATE = RS_SAMPLING_RATE
 RECORD_DURATION = 2
-SIMILARITY_THRESHOLD = 0.50
+SIMILARITY_THRESHOLD = 0.10
 SPEAKER_NOISE_REDUCTION_BLEND = 0.10  # Portion of denoised signal to mix into embeddings (0.0 disables)
 SPEAKER_EMBED_SEGMENT_SECONDS = 0.95  # Duration per chunk when averaging embeddings
 SPEAKER_EMBED_OVERLAP = 0.45  # Fractional overlap between chunks for embeddings
@@ -944,18 +950,52 @@ def load_local_stt_pipeline(force_autodetect=False):
             fw_cache_dir = OPTIMIZED_DIR / "faster-whisper"
             fw_cache_dir.mkdir(parents=True, exist_ok=True)
 
-            cpu_threads = max(1, min(4, os.cpu_count() or 1))
+            env_threads = os.getenv("WHISPER_CPU_THREADS")
+            if env_threads:
+                try:
+                    cpu_threads = max(1, int(env_threads))
+                except ValueError:
+                    cpu_threads = max(1, os.cpu_count() or 1)
+            else:
+                cpu_threads = max(1, os.cpu_count() or 1)
+
+            worker_count = max(1, min(cpu_threads, 4))
+            compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
             fw_model = WhisperModel(
                 "tiny",
                 device="cpu",
-                compute_type="int8",
+                compute_type=compute_type,
                 download_root=str(fw_cache_dir),
-                cpu_threads=max(1, min(2, cpu_threads)),
-                num_workers=1,
+                cpu_threads=cpu_threads,
+                num_workers=worker_count,
             )
 
+            # Warm model with a half-second of silence to avoid first-call lag.
+            try:
+                dummy_audio = np.zeros(int(0.5 * 16000), dtype=np.float32)
+                fw_model.transcribe(
+                    dummy_audio,
+                    language=None,
+                    task="transcribe",
+                    beam_size=1,
+                    best_of=1,
+                    temperature=0.0,
+                    condition_on_previous_text=False,
+                    compression_ratio_threshold=2.4,
+                    log_prob_threshold=-0.1,
+                    no_speech_threshold=0.65,
+                    without_timestamps=True,
+                    vad_filter=False,
+                    suppress_blank=True,
+                )
+            except Exception:
+                pass
+
             _stt_pipe = _FasterWhisperPipeline(fw_model)
-            print("Loaded Whisper tiny via faster-whisper backend (int8)")
+            print(
+                "Loaded Whisper tiny via faster-whisper backend "
+                f"(threads={cpu_threads}, workers={worker_count}, compute={compute_type})"
+            )
             return _stt_pipe
         except ImportError:
             print(
@@ -3038,6 +3078,32 @@ def match_command(transcribed_text):
     else:
         words = [w for w in text.split() if w]
 
+    if RAPIDFUZZ_AVAILABLE:
+        variation_lookup: Dict[str, str] = {}
+        variation_phrases: List[str] = []
+        for cmd, variations in WHEELCHAIR_COMMANDS.items():
+            for variation in variations:
+                normalized_variation = variation.lower()
+                if normalized_variation not in variation_lookup:
+                    variation_lookup[normalized_variation] = cmd
+                    variation_phrases.append(normalized_variation)
+        if variation_phrases:
+            best_match = rapidfuzz_process.extractOne(
+                text,
+                variation_phrases,
+                scorer=rapidfuzz_fuzz.token_set_ratio,
+            )
+            if best_match:
+                phrase, score, _ = best_match
+                mapped_cmd = variation_lookup.get(phrase)
+                if mapped_cmd:
+                    record_vote(
+                        mapped_cmd,
+                        float(score) / 100.0,
+                        f"rapidfuzz token_set_ratio '{phrase}'",
+                        language_hint=_language_for_phrase(phrase),
+                    )
+
     detected_language = detect_language(text)
     print(f"Detected language: {detected_language}")
 
@@ -3216,24 +3282,30 @@ def match_command(transcribed_text):
             if len(variation) < 3:
                 continue
 
-            variation_language = _language_for_phrase(variation)
-            variation_words = variation.split()
+            variation_lower = variation.lower()
+            variation_language = _language_for_phrase(variation_lower)
+            variation_words = variation_lower.split()
             for v_word in variation_words:
                 if len(v_word) > 2 and v_word in expanded_words:
                     if not rotation_command or allow_rotation_scoring:
                         record_vote(cmd, 0.82, f"word match '{v_word}'", language_hint=_language_for_phrase(v_word))
                     break
 
-            similarity = difflib.SequenceMatcher(None, text, variation).ratio()
-            if variation in text:
+            similarity = difflib.SequenceMatcher(None, text, variation_lower).ratio()
+            if variation_lower in text:
                 similarity += 0.18
 
-            variation_word_set = set(variation.split())
+            variation_word_set = set(variation_lower.split())
             expanded_word_set = set(expanded_words)
             common_words = variation_word_set.intersection(expanded_word_set)
             if variation_word_set and common_words:
                 word_overlap_score = len(common_words) / len(variation_word_set) * 0.95
                 similarity = max(similarity, word_overlap_score)
+
+            if RAPIDFUZZ_AVAILABLE:
+                token_score = rapidfuzz_fuzz.token_set_ratio(text, variation_lower) / 100.0
+                partial_score = rapidfuzz_fuzz.partial_ratio(text, variation_lower) / 100.0
+                similarity = max(similarity, token_score, partial_score)
 
             if similarity >= 0.45 and (not rotation_command or allow_rotation_scoring):
                 record_vote(cmd, similarity, f"fuzzy match '{variation}'", language_hint=variation_language)

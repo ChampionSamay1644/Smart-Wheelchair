@@ -27,6 +27,7 @@ import sys
 import io
 import re
 from typing import Optional, Tuple
+from bluetooth_controller import BluetoothController, BLUETOOTH_AVAILABLE
 
 # GPIO control (only on Raspberry Pi)
 try:
@@ -68,6 +69,20 @@ SAMPLE_RATE = CONFIG['voice_processing']['sample_rate']
 TEMP_DIR = Path("./temp_ws_audio")
 TEMP_DIR.mkdir(exist_ok=True)
 
+COMMAND_TIMEOUT_SECONDS = float(CONFIG['raspberry_pi'].get('command_timeout_seconds', 1.5))
+JOYSTICK_TIMEOUT_SECONDS = float(CONFIG['raspberry_pi'].get('joystick_timeout_seconds', 0.2))
+JOYSTICK_DEAD_ZONE = float(CONFIG['raspberry_pi'].get('joystick_dead_zone', 0.15))
+JOYSTICK_STOP_GRACE_UPDATES = int(CONFIG['raspberry_pi'].get('joystick_stop_grace_updates', 2))
+JOYSTICK_STOP_CONFIRMATION = int(CONFIG['raspberry_pi'].get('joystick_stop_confirmation', 2))
+JOYSTICK_STOP_BURST_COUNT = int(CONFIG['raspberry_pi'].get('joystick_stop_burst_count', 6))
+SPEAKER_VERIFICATION_ENABLED = bool(CONFIG['voice_processing'].get('speaker_verification_enabled', False))
+
+BT_CONFIG = CONFIG.get('bluetooth', {})
+BT_ENABLED = bool(BT_CONFIG.get('enabled', False))
+BT_DEVICE_NAME = BT_CONFIG.get('device_name', 'SmartWheelchair')
+BT_CHANNEL = int(BT_CONFIG.get('channel', 3))
+BT_SERVICE_UUID = BT_CONFIG.get('service_uuid', '94f39d29-7d6d-437d-973b-fba39e49d4ee')
+
 VOICE_DB_PROCESSED_DIR = Path("./voice_db_processed")
 VOICE_DB_EMBEDDINGS_DIR = Path("./voice_db_embeddings")
 VOICE_DB_PROCESSED_DIR.mkdir(exist_ok=True)
@@ -89,6 +104,7 @@ class MotorController:
     
     def __init__(self):
         self.initialized = False
+        self._current_command = None
         if GPIO_AVAILABLE:
             try:
                 GPIO.setmode(GPIO.BCM)
@@ -117,34 +133,39 @@ class MotorController:
         GPIO.output(M_L_IN2, GPIO.HIGH if l2 else GPIO.LOW)
         GPIO.output(M_R_IN1, GPIO.HIGH if r1 else GPIO.LOW)
         GPIO.output(M_R_IN2, GPIO.HIGH if r2 else GPIO.LOW)
+
+    def _apply_state(self, command: str, *, l1: bool, l2: bool, r1: bool, r2: bool) -> bool:
+        """Apply a motor command only when it represents a state change."""
+        if self._current_command == command:
+            return False
+
+        self._set_motors(l1, l2, r1, r2)
+        self._current_command = command
+        print(f"Motors: {command.upper()}")
+        return True
     
-    def stop(self):
+    def stop(self) -> bool:
         """Stop all motors."""
-        self._set_motors(False, False, False, False)
-        print("Motors: STOP")
+        return self._apply_state("stop", l1=False, l2=False, r1=False, r2=False)
     
-    def forward(self):
+    def forward(self) -> bool:
         """Move forward."""
-        self._set_motors(True, False, True, False)
-        print("Motors: FORWARD")
+        return self._apply_state("forward", l1=True, l2=False, r1=True, r2=False)
     
-    def backward(self):
+    def backward(self) -> bool:
         """Move backward."""
-        self._set_motors(False, True, False, True)
-        print("Motors: BACKWARD")
+        return self._apply_state("backward", l1=False, l2=True, r1=False, r2=True)
     
-    def left(self):
+    def left(self) -> bool:
         """Turn left."""
-        self._set_motors(False, True, True, False)
-        print("Motors: LEFT")
+        return self._apply_state("left", l1=False, l2=True, r1=True, r2=False)
     
-    def right(self):
+    def right(self) -> bool:
         """Turn right."""
-        self._set_motors(True, False, False, True)
-        print("Motors: RIGHT")
+        return self._apply_state("right", l1=True, l2=False, r1=False, r2=True)
     
-    def execute_command(self, command: str):
-        """Execute a motor command."""
+    def execute_command(self, command: str) -> dict:
+        """Execute a motor command and describe the outcome."""
         alias_map = {
             "rotate_left": "left",
             "spin_left": "left",
@@ -168,12 +189,13 @@ class MotorController:
             "stop": self.stop,
         }
 
-        if normalized in command_map:
-            command_map[normalized]()
-            return True
-        else:
+        action = command_map.get(normalized)
+        if action is None:
             print(f"Unknown command: {command}")
-            return False
+            return {"known": False, "changed": False, "command": normalized}
+
+        changed = action()
+        return {"known": True, "changed": changed, "command": normalized}
     
     def cleanup(self):
         """Cleanup GPIO resources."""
@@ -181,6 +203,360 @@ class MotorController:
             self.stop()
             GPIO.cleanup()
             print("GPIO cleaned up")
+
+
+class CommandDispatcher:
+    """Single-threaded command queue feeding the motor controller."""
+
+    def __init__(
+        self,
+        *,
+        loop: asyncio.AbstractEventLoop,
+        motor_controller: MotorController,
+        event_callback,
+        manual_timeout: float,
+        joystick_timeout: float,
+        joystick_dead_zone: float,
+        joystick_stop_grace: int = JOYSTICK_STOP_GRACE_UPDATES,
+        joystick_stop_confirmation: int = JOYSTICK_STOP_CONFIRMATION,
+        joystick_stop_burst: int = JOYSTICK_STOP_BURST_COUNT,
+    ) -> None:
+        self.loop = loop
+        self.motor_controller = motor_controller
+        self.event_callback = event_callback
+        self.manual_timeout = max(0.0, manual_timeout)
+        self.joystick_timeout = max(0.0, joystick_timeout)
+        self.joystick_dead_zone = max(0.0, min(1.0, joystick_dead_zone))
+        self.joystick_stop_grace = max(0, int(joystick_stop_grace))
+        self.joystick_stop_confirmation = max(1, int(joystick_stop_confirmation))
+        self.joystick_stop_burst = max(1, int(joystick_stop_burst))
+
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._worker_task = loop.create_task(self._worker())
+        self._manual_timer = None
+        self._joystick_timer = None
+        self._joystick_idle_frames = 0
+        self._last_joystick_command = "stop"
+        self._last_joystick_vector = {"x": 0.0, "y": 0.0, "magnitude": 0.0}
+        self._joystick_stop_streak = 0
+        self._joystick_stop_burst_remaining = 0
+
+    async def submit_command(self, *, source: str, mode: str, payload: dict):
+        future = self.loop.create_future()
+        await self._queue.put((source, mode, payload, future))
+        return await future
+
+    async def emergency_stop(self, *, source: str, reason: str = "emergency"):
+        payload = {"command": "stop", "reason": reason}
+        return await self.submit_command(source=source, mode="manual", payload=payload)
+
+    async def shutdown(self):
+        if self._manual_timer:
+            self._manual_timer.cancel()
+        if self._joystick_timer:
+            self._joystick_timer.cancel()
+        await self._queue.put((None, None, None, None))
+        if self._worker_task:
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+        self._worker_task = None
+
+    async def _worker(self):
+        while True:
+            source, mode, payload, future = await self._queue.get()
+            if source is None:
+                if future is not None and not future.done():
+                    future.set_result(None)
+                break
+
+            try:
+                if mode == "manual":
+                    event = self._handle_manual(source, payload)
+                elif mode == "joystick":
+                    event = self._handle_joystick(source, payload)
+                else:
+                    event = {
+                        "type": "command_ack",
+                        "state": "error",
+                        "source": source,
+                        "mode": mode,
+                        "message": f"Unsupported mode '{mode}'",
+                        "timestamp": time.time(),
+                    }
+
+                if future is not None and not future.done():
+                    future.set_result(event)
+
+                if event and self.event_callback is not None:
+                    await self.event_callback(event)
+
+            except Exception as exc:
+                error_event = {
+                    "type": "command_ack",
+                    "state": "error",
+                    "source": source,
+                    "mode": mode,
+                    "message": f"Command processing failed: {exc}",
+                    "timestamp": time.time(),
+                }
+                if future is not None and not future.done():
+                    future.set_exception(exc)
+                if self.event_callback is not None:
+                    await self.event_callback(error_event)
+            finally:
+                self._queue.task_done()
+
+    def _handle_manual(self, source: str, payload: dict):
+        command = str(payload.get("command", "")).strip().lower()
+        result = {"known": False, "changed": False, "command": command}
+
+        if not command:
+            state = "error"
+            message = "Missing manual command"
+        else:
+            result = self.motor_controller.execute_command(command)
+            normalized = result.get("command", command)
+
+            if not result.get("known", False):
+                state = "error"
+                message = f"Unknown command '{command}'"
+            elif not result.get("changed", False):
+                if normalized != "stop":
+                    self._schedule_manual_timeout(source)
+                else:
+                    self._cancel_manual_timeout()
+                    self._cancel_joystick_timeout()
+                return None
+            else:
+                if normalized == "stop":
+                    self._cancel_manual_timeout()
+                    self._cancel_joystick_timeout()
+                    self._last_joystick_command = "stop"
+                    self._joystick_idle_frames = 0
+                    state = "stopped"
+                    message = "Motors stopped"
+                else:
+                    self._schedule_manual_timeout(source)
+                    state = "moving"
+                    message = f"Command '{normalized}' executed"
+            command = normalized
+
+        event = {
+            "type": "command_ack",
+            "state": state,
+            "source": source,
+            "mode": "manual",
+            "command": command,
+            "timestamp": time.time(),
+            "success": result.get("known", False) and result.get("changed", False),
+            "details": {k: v for k, v in payload.items() if k != "command"},
+            "message": message,
+        }
+        return event
+
+    def _handle_joystick(self, source: str, payload: dict):
+        def _extract_axis(candidates, fallback):
+            for key in candidates:
+                if key in payload:
+                    raw = payload.get(key)
+                    try:
+                        return float(raw), True
+                    except (TypeError, ValueError):
+                        return fallback, False
+            return fallback, False
+
+        last_vector = self._last_joystick_vector
+        x, x_valid = _extract_axis(("x", "horizontal", "axis_x", "leftX", "lx"), last_vector["x"])
+        y, y_valid = _extract_axis(("y", "vertical", "axis_y", "leftY", "ly"), last_vector["y"])
+
+        has_force_stop_flag = "force_stop" in payload
+        force_stop = bool(payload.get("force_stop", False))
+
+        magnitude = None
+        if "magnitude" in payload:
+            try:
+                magnitude = float(payload.get("magnitude"))
+            except (TypeError, ValueError):
+                magnitude = None
+        if magnitude is None:
+            magnitude = min(1.0, (x ** 2 + y ** 2) ** 0.5)
+
+        magnitude = max(0.0, min(1.0, magnitude))
+        self._last_joystick_vector = {"x": x, "y": y, "magnitude": magnitude}
+
+        axis_keys_present = any(
+            key in payload
+            for key in ("x", "horizontal", "axis_x", "leftX", "lx", "y", "vertical", "axis_y", "leftY", "ly")
+        )
+
+        if not axis_keys_present and "magnitude" not in payload:
+            # Ignore frames that only carry metadata and no positional update.
+            return None
+
+        if axis_keys_present and not (x_valid or y_valid):
+            return {
+                "type": "command_ack",
+                "state": "error",
+                "source": source,
+                "mode": "joystick",
+                "command": "stop",
+                "timestamp": time.time(),
+                "success": False,
+                "message": "Invalid joystick payload",
+            }
+
+        if magnitude < self.joystick_dead_zone:
+            if force_stop:
+                self._joystick_idle_frames = 0
+                self._joystick_stop_streak = 0
+                self._joystick_stop_burst_remaining = 0
+                changed = self.motor_controller.stop()
+                self._last_joystick_command = "stop"
+                self._cancel_joystick_timeout()
+                state = "stopped"
+                command = "stop"
+                message = (
+                    "Joystick released; motors stopped"
+                    if changed
+                    else "Joystick already stopped"
+                )
+            elif has_force_stop_flag:
+                self._joystick_idle_frames = 0
+                self._joystick_stop_streak = 0
+                self._schedule_joystick_timeout()
+                return None
+            else:
+                if self._last_joystick_command != "stop":
+                    self._joystick_idle_frames += 1
+                    if self._joystick_idle_frames <= self.joystick_stop_grace:
+                        self._schedule_joystick_timeout()
+                        self._joystick_stop_streak = 0
+                        return None
+                else:
+                    self._joystick_idle_frames = 0
+
+                self._joystick_stop_streak += 1
+                self._joystick_stop_streak = min(self._joystick_stop_streak, self.joystick_stop_confirmation)
+                self._schedule_joystick_timeout()
+
+                if self._joystick_stop_streak < self.joystick_stop_confirmation:
+                    return None
+
+                emit_event = False
+                changed = False
+                if self._last_joystick_command != "stop":
+                    changed = self.motor_controller.stop()
+                    self._last_joystick_command = "stop"
+                    self._cancel_joystick_timeout()
+                    self._joystick_stop_burst_remaining = max(0, self.joystick_stop_burst - 1)
+                    emit_event = changed or self._joystick_stop_burst_remaining > 0
+                else:
+                    if self._joystick_stop_burst_remaining > 0:
+                        self._joystick_stop_burst_remaining -= 1
+                        emit_event = True
+                    else:
+                        emit_event = False
+
+                if not emit_event:
+                    return None
+
+                state = "stopped"
+                command = "stop"
+                message = (
+                    "Joystick centered; motors stopped"
+                    if self._joystick_stop_burst_remaining == 0
+                    else "Joystick centered; confirming stop"
+                )
+        else:
+            self._joystick_idle_frames = 0
+            self._joystick_stop_streak = 0
+            self._joystick_stop_burst_remaining = 0
+            if abs(y) >= abs(x):
+                command = "forward" if y >= 0 else "backward"
+            else:
+                command = "right" if x >= 0 else "left"
+
+            result = self.motor_controller.execute_command(command)
+            self._last_joystick_command = command
+            self._schedule_joystick_timeout()
+            if not result.get("known", False):
+                state = "error"
+                message = f"Unknown joystick direction '{command}'"
+            elif not result.get("changed", False):
+                self._schedule_joystick_timeout()
+                return None
+            else:
+                command = result.get("command", command)
+                state = "moving"
+                message = f"Joystick command '{command}' executed"
+                self._schedule_joystick_timeout()
+
+        event = {
+            "type": "command_ack",
+            "state": state,
+            "source": source,
+            "mode": "joystick",
+            "command": command,
+            "timestamp": time.time(),
+            "success": state != "error",
+            "details": {
+                "x": x,
+                "y": y,
+                "magnitude": magnitude,
+            },
+            "message": message,
+        }
+        if command == "stop":
+            event["details"]["stop_streak"] = self._joystick_stop_streak
+            if self.joystick_stop_burst > 1:
+                event["details"]["stop_burst_remaining"] = self._joystick_stop_burst_remaining
+        return event
+
+    def _schedule_manual_timeout(self, source: str):
+        if self.manual_timeout <= 0:
+            return
+        if source in {"bluetooth", "websocket", "voice"}:  # clients send explicit stop
+            return
+        if self._manual_timer:
+            self._manual_timer.cancel()
+        self._manual_timer = self.loop.call_later(
+            self.manual_timeout,
+            lambda: asyncio.create_task(
+                self.submit_command(
+                    source="safety",
+                    mode="manual",
+                    payload={"command": "stop", "reason": "manual_timeout"},
+                )
+            ),
+        )
+
+    def _schedule_joystick_timeout(self):
+        if self.joystick_timeout <= 0:
+            return
+        if self._joystick_timer:
+            self._joystick_timer.cancel()
+        self._joystick_timer = self.loop.call_later(
+            self.joystick_timeout,
+            lambda: asyncio.create_task(
+                self.submit_command(
+                    source="safety",
+                    mode="manual",
+                    payload={"command": "stop", "reason": "joystick_timeout"},
+                )
+            ),
+        )
+
+    def _cancel_manual_timeout(self):
+        if self._manual_timer:
+            self._manual_timer.cancel()
+            self._manual_timer = None
+
+    def _cancel_joystick_timeout(self):
+        if self._joystick_timer:
+            self._joystick_timer.cancel()
+            self._joystick_timer = None
 
 # =============================================================================
 # AUDIO PROCESSING
@@ -249,6 +625,60 @@ class WheelchairWebSocketServer:
         self._voice_lock = asyncio.Lock()
         self.enrollment_progress = {}
         self._warm_stt_pipeline()
+        self.dispatcher: Optional[CommandDispatcher] = None
+        self.bluetooth_controller: Optional[BluetoothController] = None
+        self.camera_clients = {}
+        self._last_command_signature = {}
+
+    async def _broadcast_event(self, event: dict):
+        if not event:
+            return
+
+        if event.get("type") == "command_ack":
+            mode_key = event.get("mode", "*")
+            signature = (event.get("command"), event.get("state"), bool(event.get("success")))
+            if self._last_command_signature.get(mode_key) == signature:
+                return
+            self._last_command_signature[mode_key] = signature
+
+        if self.connected_clients:
+            message = json.dumps(event)
+            disconnected = []
+            for ws in list(self.connected_clients):
+                try:
+                    await ws.send(message)
+                except websockets.exceptions.ConnectionClosed:
+                    disconnected.append(ws)
+                except Exception as exc:
+                    print(f"WebSocket broadcast error: {exc}")
+                    disconnected.append(ws)
+            for ws in disconnected:
+                self.connected_clients.discard(ws)
+
+        if self.bluetooth_controller is not None:
+            self.bluetooth_controller.publish_event(event)
+
+    async def _broadcast_camera_frame(self, payload: dict, *, exclude=None):
+        if not payload:
+            return
+
+        exclude = exclude or set()
+        if self.connected_clients:
+            message = json.dumps(payload)
+            disconnected = []
+            for ws in list(self.connected_clients):
+                if ws in exclude:
+                    continue
+                try:
+                    await ws.send(message)
+                except websockets.exceptions.ConnectionClosed:
+                    disconnected.append(ws)
+                except Exception as exc:
+                    print(f"WebSocket broadcast error: {exc}")
+                    disconnected.append(ws)
+            for ws in disconnected:
+                self.connected_clients.discard(ws)
+                self.camera_clients.pop(ws, None)
 
     def _warm_stt_pipeline(self):
         """Warm Whisper tiny pipeline so the first command is instant."""
@@ -599,6 +1029,7 @@ class WheelchairWebSocketServer:
             print(f"✗ Client disconnected: {client_id} ({exc.code} - {exc.reason})")
         finally:
             self.connected_clients.discard(websocket)
+            self.camera_clients.pop(websocket, None)
             print(f"  Total clients: {len(self.connected_clients)}")
     
     async def handle_control_message(self, websocket, message: str):
@@ -693,7 +1124,12 @@ class WheelchairWebSocketServer:
             
             elif msg_type == 'emergency_stop':
                 # Emergency stop
-                self.motor_controller.stop()
+                if self.dispatcher is not None:
+                    await self.dispatcher.emergency_stop(
+                        source="websocket", reason="remote_emergency"
+                    )
+                else:
+                    self.motor_controller.stop()
                 await websocket.send(json.dumps({
                     "type": "emergency_stop_executed"
                 }))
@@ -707,6 +1143,60 @@ class WheelchairWebSocketServer:
             elif msg_type == 'check_voice_profile':
                 speaker_name = data.get('speaker_name')
                 await self.send_voice_profile_status(websocket, speaker_name)
+
+            elif msg_type == 'camera_register':
+                stream_name = data.get('stream', 'camera')
+                self.camera_clients[websocket] = stream_name
+                response = {
+                    "type": "camera_registered",
+                    "stream": stream_name,
+                    "message": "Camera stream registered",
+                }
+                width = data.get('width')
+                height = data.get('height')
+                if width is not None and height is not None:
+                    response["resolution"] = {"width": width, "height": height}
+                await websocket.send(json.dumps(response))
+
+            elif msg_type == 'camera_unregister':
+                stream_name = self.camera_clients.pop(websocket, None) or data.get('stream')
+                await websocket.send(json.dumps({
+                    "type": "camera_unregistered",
+                    "stream": stream_name,
+                }))
+
+            elif msg_type == 'camera_frame':
+                frame_data = data.get('data')
+                if not isinstance(frame_data, str):
+                    return
+                stream_name = self.camera_clients.get(websocket) or data.get('stream', 'camera')
+                payload = {
+                    "type": "camera_frame",
+                    "stream": stream_name,
+                    "format": data.get('format', 'jpeg'),
+                    "timestamp": data.get('timestamp', time.time()),
+                    "data": frame_data,
+                }
+                await self._broadcast_camera_frame(payload, exclude={websocket})
+
+            elif msg_type == 'manual_control':
+                mode = data.get('mode', 'manual')
+                if self.dispatcher is None:
+                    raise RuntimeError("Command dispatcher not ready")
+
+                if mode == 'joystick':
+                    event = await self.dispatcher.submit_command(
+                        source="websocket", mode="joystick", payload=data
+                    )
+                else:
+                    event = await self.dispatcher.submit_command(
+                        source="websocket", mode="manual", payload=data
+                    )
+
+                if event:
+                    response = {"type": "manual_control_ack"}
+                    response.update(event)
+                    await websocket.send(json.dumps(response))
             
             else:
                 print(f"Unknown message type: {msg_type}")
@@ -767,12 +1257,20 @@ class WheelchairWebSocketServer:
                 fast_mode=True,
             )
 
-            speaker_name, speaker_score, speaker_verified = await self.identify_speaker_from_audio(audio_path)
+            if SPEAKER_VERIFICATION_ENABLED:
+                speaker_name, speaker_score, speaker_verified = await self.identify_speaker_from_audio(audio_path)
 
-            if speaker_name:
-                print(f"Speaker match: {speaker_name} (score: {speaker_score:.2f}, verified: {speaker_verified})")
+                if speaker_name:
+                    print(
+                        f"Speaker match: {speaker_name} (score: {speaker_score:.2f}, verified: {speaker_verified})"
+                    )
+                else:
+                    print(f"Speaker match: unknown (score: {speaker_score:.2f})")
             else:
-                print(f"Speaker match: unknown (score: {speaker_score:.2f})")
+                speaker_name = None
+                speaker_score = 1.0
+                speaker_verified = True
+                print("Speaker verification disabled; executing command without identity check")
             
             if transcription:
                 print(f"Transcription: {transcription}")
@@ -780,7 +1278,7 @@ class WheelchairWebSocketServer:
             if command:
                 print(f"\n✓ Command recognized: '{command}' (confidence: {confidence:.2f})")
 
-                if not speaker_verified:
+                if SPEAKER_VERIFICATION_ENABLED and not speaker_verified:
                     print(
                         "Speaker verification below threshold "
                         f"({speaker_score:.2f} < {SIMILARITY_THRESHOLD:.2f}) — blocking motors."
@@ -804,40 +1302,71 @@ class WheelchairWebSocketServer:
                     }))
                     return
 
-                # Execute the motor command when speaker is verified
-                success = self.motor_controller.execute_command(command)
+                if self.dispatcher is not None:
+                    event = await self.dispatcher.submit_command(
+                        source="voice",
+                        mode="manual",
+                        payload={
+                            "command": command,
+                            "confidence": float(confidence),
+                            "transcription": transcription,
+                            "speaker": speaker_name,
+                        },
+                    )
+                    executed = event.get("state") in {"moving", "stopped"}
+                    message = event.get("message")
+                else:
+                    result = self.motor_controller.execute_command(command)
+                    normalized = result.get("command", command)
+                    executed = result.get("known", False) and result.get("changed", False)
+                    if not result.get("known", False):
+                        message = f"Unknown command '{command}'"
+                    elif executed:
+                        message = f"Command '{normalized}' executed"
+                    else:
+                        message = f"Command '{normalized}' already active"
 
                 # Send feedback to the app
+                speaker_payload = {
+                    "name": speaker_name,
+                    "score": float(speaker_score),
+                    "verified": bool(speaker_verified),
+                }
+                if not SPEAKER_VERIFICATION_ENABLED:
+                    speaker_payload["verification"] = "disabled"
+
                 await websocket.send(json.dumps({
                     "type": "command_recognized",
                     "command": command,
                     "transcription": transcription,
                     "confidence": float(confidence),
-                    "executed": success,
-                    "message": f"Command '{command}' executed" if success else f"Command '{command}' not executed",
-                    "speaker": {
-                        "name": speaker_name,
-                        "score": float(speaker_score),
-                        "verified": bool(speaker_verified)
-                    }
+                    "executed": bool(executed),
+                    "message": message,
+                    "speaker": speaker_payload,
                 }))
-            
+
             else:
                 print(f"\n✗ Command not recognized (confidence: {confidence:.2f})")
-                print(
-                    "Speaker match during failure: "
-                    f"{speaker_name or 'unknown'} (score: {speaker_score:.2f}, verified: {speaker_verified})"
-                )
+                if SPEAKER_VERIFICATION_ENABLED:
+                    print(
+                        "Speaker match during failure: "
+                        f"{speaker_name or 'unknown'} (score: {speaker_score:.2f}, verified: {speaker_verified})"
+                    )
+
+                failure_speaker_payload = {
+                    "name": speaker_name,
+                    "score": float(speaker_score),
+                    "verified": bool(speaker_verified),
+                }
+                if not SPEAKER_VERIFICATION_ENABLED:
+                    failure_speaker_payload["verification"] = "disabled"
+
                 await websocket.send(json.dumps({
                     "type": "command_not_recognized",
                     "transcription": transcription,
                     "confidence": float(confidence),
                     "message": "Could not recognize the command. Please try again.",
-                    "speaker": {
-                        "name": speaker_name,
-                        "score": float(speaker_score),
-                        "verified": bool(speaker_verified)
-                    }
+                    "speaker": failure_speaker_payload,
                 }))
         
         except Exception as e:
@@ -1055,8 +1584,16 @@ class WheelchairWebSocketServer:
 
         print("=" * 50 + "\n")
     
+    async def shutdown(self):
+        if self.dispatcher is not None:
+            await self.dispatcher.shutdown()
+            self.dispatcher = None
+
     def cleanup(self):
         """Cleanup resources."""
+        if self.bluetooth_controller is not None:
+            self.bluetooth_controller.stop()
+            self.bluetooth_controller = None
         self.motor_controller.cleanup()
     
     async def start(self):
@@ -1065,6 +1602,41 @@ class WheelchairWebSocketServer:
         print("🦽 SMART WHEELCHAIR CONTROL SERVER")
         print("="*60)
         print(f"WebSocket server starting on port {WEBSOCKET_PORT}...")
+
+        loop = asyncio.get_running_loop()
+        self.dispatcher = CommandDispatcher(
+            loop=loop,
+            motor_controller=self.motor_controller,
+            event_callback=self._broadcast_event,
+            manual_timeout=COMMAND_TIMEOUT_SECONDS,
+            joystick_timeout=JOYSTICK_TIMEOUT_SECONDS,
+            joystick_dead_zone=JOYSTICK_DEAD_ZONE,
+            joystick_stop_grace=JOYSTICK_STOP_GRACE_UPDATES,
+            joystick_stop_confirmation=JOYSTICK_STOP_CONFIRMATION,
+            joystick_stop_burst=JOYSTICK_STOP_BURST_COUNT,
+        )
+
+        if BT_ENABLED:
+            if not BLUETOOTH_AVAILABLE:
+                print("Warning: PyBluez not installed. Bluetooth transport disabled.")
+            else:
+                controller = BluetoothController(
+                    loop=loop,
+                    dispatcher=self.dispatcher,
+                    event_callback=self._broadcast_event,
+                    device_name=BT_DEVICE_NAME,
+                    channel=BT_CHANNEL,
+                    service_uuid=BT_SERVICE_UUID,
+                )
+                if controller.start():
+                    self.bluetooth_controller = controller
+                    print(
+                        f"✓ Bluetooth RFCOMM listening as '{BT_DEVICE_NAME}' on channel {BT_CHANNEL}"
+                    )
+                else:
+                    print("✗ Failed to start Bluetooth controller")
+        else:
+            print("Bluetooth transport disabled in configuration")
         
         async with websockets.serve(
             self.handle_client, 
@@ -1092,6 +1664,7 @@ async def main():
     except KeyboardInterrupt:
         print("\n\nShutting down server...")
     finally:
+        await server.shutdown()
         server.cleanup()
         print("Server stopped")
 

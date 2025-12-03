@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'core/providers/connection_provider.dart';
 import 'services/voice_cache_service.dart';
 import 'services/wheelchair_websocket_service.dart';
+import 'services/emergency_stop_service.dart';
 import 'voice_enrollment_page.dart';
 import 'widgets/connection_dialog.dart';
 
@@ -90,13 +91,15 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
     }
 
     _connectivitySubscription?.cancel();
-    _connectivitySubscription = Connectivity()
-        .onConnectivityChanged
-        .listen(_updateConnectivityState);
+    _connectivitySubscription = Connectivity().onConnectivityChanged.listen(
+      _updateConnectivityState,
+    );
   }
 
   void _updateConnectivityState(ConnectivityResult result) {
-    final wifiActive = result == ConnectivityResult.wifi || result == ConnectivityResult.ethernet;
+    final wifiActive =
+        result == ConnectivityResult.wifi ||
+        result == ConnectivityResult.ethernet;
     if (!mounted) {
       _isWifiAvailable = wifiActive;
       return;
@@ -108,7 +111,9 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
       });
 
       if (!wifiActive) {
-        _showSnackBar('Wi-Fi is off. Connect to the wheelchair network to use voice control.');
+        _showSnackBar(
+          'Wi-Fi is off. Connect to the wheelchair network to use voice control.',
+        );
       }
     }
   }
@@ -229,17 +234,36 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
         break;
       case 'connection_failed':
         setState(() {
-          _statusMessage = 'Connection failed - retrying...';
+          final reason = message['message']?.toString();
+          _statusMessage = reason ?? 'Connection failed';
           _isListening = false;
           _isProcessing = false;
         });
         break;
       case 'disconnected':
         setState(() {
-          _statusMessage = 'Connection lost... attempting to reconnect';
+          final reason = message['message']?.toString();
+          _statusMessage = reason ?? 'Disconnected from server';
           _isListening = false;
           _isProcessing = false;
         });
+        break;
+      case 'reconnecting':
+        setState(() {
+          final reason = message['message']?.toString();
+          _statusMessage = reason ?? 'Reconnecting...';
+          _isListening = false;
+          _isProcessing = false;
+        });
+        break;
+      case 'reconnect_exhausted':
+        setState(() {
+          final reason = message['message']?.toString();
+          _statusMessage = reason ?? 'Unable to reach wheelchair server';
+          _isListening = false;
+          _isProcessing = false;
+        });
+        _showSnackBar('Connection attempts stopped. Update the IP and retry.');
         break;
       case 'recording_started':
         setState(() {
@@ -260,10 +284,11 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
         final speakerName = speakerData?['name']?.toString();
         final speakerScore = (speakerData?['score'] as num?)?.toDouble();
         final speakerVerified = speakerData?['verified'] == true;
-        final requiredThreshold =
-            (speakerData?['required_threshold'] as num?)?.toDouble();
+        final requiredThreshold = (speakerData?['required_threshold'] as num?)
+            ?.toDouble();
         final executed = message['executed'] == true;
-        final feedbackMessage = message['message']?.toString() ??
+        final feedbackMessage =
+            message['message']?.toString() ??
             (executed
                 ? "Command '$command' executed"
                 : 'Authentication failed. Command blocked.');
@@ -329,9 +354,11 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
         break;
       case 'voice_profile_status':
         final exists = message['exists'] == true;
-        final speakerName =
-            (message['speaker_name'] as String?)?.trim().toLowerCase();
-        final profiles = (message['available_profiles'] as List<dynamic>?)
+        final speakerName = (message['speaker_name'] as String?)
+            ?.trim()
+            .toLowerCase();
+        final profiles =
+            (message['available_profiles'] as List<dynamic>?)
                 ?.map((value) => value.toString())
                 .toList() ??
             <String>[];
@@ -365,10 +392,9 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
 
     await prefs.setBool('voice_profile_exists', exists);
 
-    final normalizedName =
-        (speakerName != null && speakerName.isNotEmpty)
-            ? speakerName
-            : _voiceProfileName;
+    final normalizedName = (speakerName != null && speakerName.isNotEmpty)
+        ? speakerName
+        : _voiceProfileName;
 
     if (normalizedName != null && normalizedName.isNotEmpty) {
       await prefs.setString('voice_profile_name', normalizedName);
@@ -381,8 +407,8 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
       availableProfiles: profiles.isNotEmpty
           ? profiles
           : (normalizedName != null && normalizedName.isNotEmpty)
-              ? <String>[normalizedName]
-              : <String>[],
+          ? <String>[normalizedName]
+          : <String>[],
     );
 
     if (!mounted) {
@@ -397,8 +423,8 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
       _availableVoiceProfiles = profiles.isNotEmpty
           ? profiles
           : (_voiceProfileName != null && _voiceProfileName!.isNotEmpty)
-              ? <String>[_voiceProfileName!]
-              : <String>[];
+          ? <String>[_voiceProfileName!]
+          : <String>[];
     });
 
     if (exists) {
@@ -578,8 +604,8 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
   }
 
   void _emergencyStop() {
-    _wsService.emergencyStop();
-    _showSnackBar('🚨 EMERGENCY STOP ACTIVATED');
+    EmergencyStopService.trigger();
+    _showSnackBar('🚨 Emergency stop sent');
   }
 
   Future<void> _navigateToEnrollment({bool force = false}) async {
@@ -608,10 +634,7 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
   void _showSnackBar(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        duration: const Duration(seconds: 2),
-      ),
+      SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
     );
   }
 
@@ -643,30 +666,30 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
     }
 
     final connectionIcon = !_isWifiAvailable
-      ? Icons.wifi_off
-      : isConnected
+        ? Icons.wifi_off
+        : isConnected
         ? Icons.wifi
         : isConnecting
-          ? Icons.wifi_tethering
-          : Icons.wifi_off;
+        ? Icons.wifi_tethering
+        : Icons.wifi_off;
 
     final statusColor = !_isWifiAvailable
-      ? Colors.red
-      : isConnected
+        ? Colors.red
+        : isConnected
         ? Colors.green
         : isConnecting
-          ? Colors.orange
-          : Colors.red;
+        ? Colors.orange
+        : Colors.red;
 
     final statusMessage = !_isWifiAvailable
-      ? 'Wi-Fi disconnected'
-      : _statusMessage.isNotEmpty
+        ? 'Wi-Fi disconnected'
+        : _statusMessage.isNotEmpty
         ? _statusMessage
         : isConnected
-          ? 'Connected to wheelchair'
-          : isConnecting
-            ? 'Connecting...'
-            : 'Not connected';
+        ? 'Connected to wheelchair'
+        : isConnecting
+        ? 'Connecting...'
+        : 'Not connected';
 
     return Scaffold(
       appBar: AppBar(
@@ -679,20 +702,20 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
               message: !_isWifiAvailable
                   ? 'Wi-Fi disconnected'
                   : isConnected
-                      ? 'Connected to wheelchair'
-                      : isConnecting
-                          ? 'Connecting to wheelchair'
-                          : 'Not connected',
+                  ? 'Connected to wheelchair'
+                  : isConnecting
+                  ? 'Connecting to wheelchair'
+                  : 'Not connected',
               child: Icon(
                 Icons.circle,
                 size: 12,
                 color: !_isWifiAvailable
                     ? Colors.red
                     : isConnected
-                        ? Colors.green
-                        : isConnecting
-                            ? Colors.orange
-                            : Colors.red,
+                    ? Colors.green
+                    : isConnecting
+                    ? Colors.orange
+                    : Colors.red,
               ),
             ),
           ],
@@ -718,10 +741,7 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
                 }
               },
               itemBuilder: (context) => const [
-                PopupMenuItem(
-                  value: 'disconnect',
-                  child: Text('Disconnect'),
-                ),
+                PopupMenuItem(value: 'disconnect', child: Text('Disconnect')),
               ],
             ),
         ],
@@ -759,8 +779,8 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: _voiceProfileExists
-                  ? Colors.blue.withValues(alpha: 0.08)
-                  : Colors.red.withValues(alpha: 0.08),
+                    ? Colors.blue.withValues(alpha: 0.08)
+                    : Colors.red.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Column(
@@ -777,9 +797,7 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
                       const SizedBox(width: 12),
                       Text(
                         'Voice Profile Status',
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleMedium
+                        style: Theme.of(context).textTheme.titleMedium
                             ?.copyWith(fontWeight: FontWeight.bold),
                       ),
                     ],
@@ -788,7 +806,7 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
                   Text(
                     _voiceProfileExists
                         ? 'Active profile: '
-                            '${_voiceProfileName ?? (_availableVoiceProfiles.isNotEmpty ? _availableVoiceProfiles.first : 'not set')}'
+                              '${_voiceProfileName ?? (_availableVoiceProfiles.isNotEmpty ? _availableVoiceProfiles.first : 'not set')}'
                         : 'No voice profile detected on the wheelchair. Please enroll your voice before using commands.',
                     style: const TextStyle(fontSize: 16),
                   ),
@@ -821,11 +839,11 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
                 padding: const EdgeInsets.all(32),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                    color: _isListening
+                  color: _isListening
                       ? Colors.red.withValues(alpha: 0.2)
                       : _isProcessing
-                        ? Colors.orange.withValues(alpha: 0.2)
-                        : Colors.blue.withValues(alpha: 0.1),
+                      ? Colors.orange.withValues(alpha: 0.2)
+                      : Colors.blue.withValues(alpha: 0.1),
                 ),
                 child: IconButton(
                   iconSize: 64,
@@ -833,35 +851,35 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
                     _isListening
                         ? Icons.mic
                         : _isProcessing
-                            ? Icons.hourglass_empty
-                            : Icons.mic_none,
+                        ? Icons.hourglass_empty
+                        : Icons.mic_none,
                     color: _isListening
                         ? Colors.red
                         : _isProcessing
-                            ? Colors.orange
-                            : Colors.blue,
+                        ? Colors.orange
+                        : Colors.blue,
                   ),
                   onPressed: (!isConnected || isConnecting || _isProcessing)
                       ? null
                       : _isListening
-                          ? _stopRecording
-                          : _startRecording,
+                      ? _stopRecording
+                      : _startRecording,
                 ),
               ),
             ),
             const SizedBox(height: 24),
             Text(
               !_isWifiAvailable
-                ? 'Enable Wi-Fi to use voice control'
-                : !isConnected
+                  ? 'Enable Wi-Fi to use voice control'
+                  : !isConnected
                   ? (isConnecting
-                      ? 'Attempting to connect to the wheelchair...'
-                      : 'Tap the WebSocket button to reconnect')
+                        ? 'Attempting to connect to the wheelchair...'
+                        : 'Tap the WebSocket button to reconnect')
                   : _isListening
-                      ? 'Listening... Speak your command'
-                      : _isProcessing
-                          ? 'Processing your voice command...'
-                          : 'Tap the microphone to start a command',
+                  ? 'Listening... Speak your command'
+                  : _isProcessing
+                  ? 'Processing your voice command...'
+                  : 'Tap the microphone to start a command',
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
@@ -894,10 +912,11 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
                         vertical: 6,
                       ),
                       decoration: BoxDecoration(
-                        color: (_lastCommandExecuted == true
-                                ? Colors.green
-                                : Colors.red)
-                            .withValues(alpha: 0.12),
+                        color:
+                            (_lastCommandExecuted == true
+                                    ? Colors.green
+                                    : Colors.red)
+                                .withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Wrap(
@@ -917,8 +936,8 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
                             _commandFeedbackMessage.isNotEmpty
                                 ? _commandFeedbackMessage
                                 : (_lastCommandExecuted == true
-                                    ? 'Command executed'
-                                    : 'Command blocked'),
+                                      ? 'Command executed'
+                                      : 'Command blocked'),
                             style: TextStyle(
                               color: _lastCommandExecuted == true
                                   ? Colors.green
@@ -934,7 +953,10 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
                     const SizedBox(height: 8),
                     Text(
                       'Heard: $_lastTranscription',
-                      style: const TextStyle(fontSize: 14, color: Colors.black54),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.black54,
+                      ),
                       textAlign: TextAlign.center,
                     ),
                   ],
@@ -945,7 +967,8 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
                       style: const TextStyle(fontSize: 14, color: Colors.grey),
                     ),
                   ],
-                  if ((_lastSpeakerName != null && _lastSpeakerName!.isNotEmpty) ||
+                  if ((_lastSpeakerName != null &&
+                          _lastSpeakerName!.isNotEmpty) ||
                       ((_lastSpeakerScore ?? 0) > 0)) ...[
                     const SizedBox(height: 8),
                     Row(
@@ -966,7 +989,10 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
                             'Speaker: '
                             '${(_lastSpeakerName != null && _lastSpeakerName!.isNotEmpty) ? _lastSpeakerName : 'Unknown'}'
                             '${_speakerConfidenceLabel()}',
-                            style: const TextStyle(fontSize: 14, color: Colors.black87),
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: Colors.black87,
+                            ),
                             textAlign: TextAlign.center,
                           ),
                         ),

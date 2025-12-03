@@ -5,6 +5,9 @@ import 'package:smart_wheelchair_app/features/outdoor_navigation/outdoor_navigat
 import 'package:provider/provider.dart';
 import 'core/providers/auth_provider.dart';
 import 'core/providers/connection_provider.dart';
+import 'core/providers/camera_feed_provider.dart';
+import 'bluetooth_connection_page.dart';
+import 'core/providers/bluetooth_provider.dart';
 import 'widgets/connection_dialog.dart';
 import 'features/auth/splash_screen.dart';
 import 'features/auth/role_selection_page.dart';
@@ -17,6 +20,7 @@ import 'manual_control_page.dart';
 import 'remote_control_page.dart';
 import 'settings_page.dart';
 import 'voice_control_page.dart';
+import 'services/emergency_stop_service.dart';
 
 void main() {
   runApp(
@@ -24,6 +28,8 @@ void main() {
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider()),
         ChangeNotifierProvider(create: (_) => ConnectionProvider()),
+        ChangeNotifierProvider(create: (_) => CameraFeedProvider()),
+        ChangeNotifierProvider(create: (_) => BluetoothProvider()),
       ],
       child: const MyApp(),
     ),
@@ -68,6 +74,7 @@ class MyApp extends StatelessWidget {
         '/remote_control': (context) => RemoteControlPage(),
         '/settings': (context) => SettingsPage(),
         '/location': (context) => const OutdoorNavigationPage(),
+        '/bluetooth_connection': (context) => const BluetoothConnectionPage(),
       },
       debugShowCheckedModeBanner: false,
     );
@@ -148,7 +155,7 @@ class _MyHomePageState extends State<MyHomePage> {
             },
           ),
           const _ConnectionStatusAction(),
-          const _BluetoothStatusPlaceholder(),
+          const _BluetoothStatusAction(),
           IconButton(
             icon: const Icon(Icons.map, color: Colors.white),
             onPressed: () {
@@ -208,22 +215,80 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                 ],
               ),
-              child: const Stack(
-                children: [
-                  Center(
+              child: Consumer<CameraFeedProvider>(
+                builder: (context, camera, _) {
+                  if (camera.hasFrame && camera.latestFrame != null) {
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(20),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          Image.memory(
+                            camera.latestFrame!,
+                            fit: BoxFit.cover,
+                            gaplessPlayback: true,
+                          ),
+                          Positioned(
+                            left: 16,
+                            bottom: 16,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withAlpha(150),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    Icons.videocam,
+                                    color: Colors.white,
+                                    size: 16,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    camera.streamName ?? 'Camera',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+
+                  final statusText =
+                      camera.error ?? 'Waiting for camera stream';
+                  return Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.camera_alt, size: 48, color: Colors.white54),
-                        SizedBox(height: 8),
+                        Icon(
+                          Icons.camera_alt,
+                          size: 48,
+                          color: Colors.white.withAlpha(150),
+                        ),
+                        const SizedBox(height: 8),
                         Text(
-                          'Camera Preview',
-                          style: TextStyle(color: Colors.white54, fontSize: 16),
+                          statusText,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 16,
+                          ),
+                          textAlign: TextAlign.center,
                         ),
                       ],
                     ),
-                  ),
-                ],
+                  );
+                },
               ),
             ),
           ),
@@ -296,11 +361,11 @@ class _MyHomePageState extends State<MyHomePage> {
         width: 64,
         child: FloatingActionButton(
           backgroundColor: Colors.red,
-          onPressed: () {
-            print('EMERGENCY STOP ACTIVATED');
+          onPressed: () async {
+            await EmergencyStopService.trigger();
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('EMERGENCY STOP ACTIVATED'),
+                content: Text('Emergency stop sent'),
                 backgroundColor: Colors.red,
                 duration: Duration(seconds: 2),
               ),
@@ -398,23 +463,45 @@ class _ConnectionStatusAction extends StatelessWidget {
   }
 }
 
-class _BluetoothStatusPlaceholder extends StatelessWidget {
-  const _BluetoothStatusPlaceholder();
+class _BluetoothStatusAction extends StatelessWidget {
+  const _BluetoothStatusAction();
 
   @override
   Widget build(BuildContext context) {
-    return IconButton(
-      icon: const Icon(
-        Icons.bluetooth,
-        color: Colors.white70,
-      ),
-      tooltip: 'Bluetooth (coming soon)',
-      onPressed: () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Bluetooth integration is coming soon.'),
-            duration: Duration(seconds: 2),
-          ),
+    return Consumer<BluetoothProvider>(
+      builder: (context, provider, _) {
+        final isAdapterOn = provider.isAdapterOn;
+        final isConnected = provider.isConnected;
+        final isConnecting = provider.isConnecting;
+
+        IconData icon;
+        Color color;
+        String tooltip;
+
+        if (!isAdapterOn) {
+          icon = Icons.bluetooth_disabled;
+          color = Colors.redAccent;
+          tooltip = 'Bluetooth adapter disabled';
+        } else if (isConnected) {
+          icon = Icons.bluetooth_connected;
+          color = Colors.lightBlueAccent;
+          tooltip = 'Connected to ${provider.connectedAddress ?? 'wheelchair'}';
+        } else if (isConnecting) {
+          icon = Icons.bluetooth_searching;
+          color = Colors.orangeAccent;
+          tooltip = 'Connecting to wheelchair...';
+        } else {
+          icon = Icons.bluetooth;
+          color = Colors.white;
+          tooltip = 'Tap to connect via Bluetooth';
+        }
+
+        return IconButton(
+          icon: Icon(icon, color: color),
+          tooltip: tooltip,
+          onPressed: () {
+            Navigator.pushNamed(context, '/bluetooth_connection');
+          },
         );
       },
     );

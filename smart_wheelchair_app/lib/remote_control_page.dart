@@ -2,6 +2,8 @@
 
 import 'package:flutter/material.dart';
 
+import 'services/emergency_stop_service.dart';
+
 class RemoteControlPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -40,10 +42,13 @@ class RemoteControlPage extends StatelessWidget {
       ),
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.red,
-        onPressed: () {
-          print('EMERGENCY STOP ACTIVATED');
+        onPressed: () async {
+          await EmergencyStopService.trigger();
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Emergency stop sent')));
         },
-        child: Icon(Icons.warning),
+        child: const Icon(Icons.warning),
       ),
     );
   }

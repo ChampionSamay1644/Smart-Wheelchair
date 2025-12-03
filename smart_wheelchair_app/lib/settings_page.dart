@@ -70,6 +70,15 @@ class SettingsPage extends StatelessWidget {
             ),
             _buildSettingItem(
               context,
+              'Bluetooth Control',
+              Icons.bluetooth,
+              'Pair and monitor wheelchair connection',
+              onTap: () {
+                Navigator.pushNamed(context, '/bluetooth_connection');
+              },
+            ),
+            _buildSettingItem(
+              context,
               'Connection Status',
               Icons.bluetooth,
               'Check device connectivity',

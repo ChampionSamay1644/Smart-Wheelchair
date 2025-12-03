@@ -49,7 +49,6 @@ class _ConnectionDialogContent extends StatefulWidget {
 
 class _ConnectionDialogContentState extends State<_ConnectionDialogContent> {
   late final TextEditingController _ipController;
-  late final TextEditingController _portController;
   String? _localError;
 
   @override
@@ -57,14 +56,12 @@ class _ConnectionDialogContentState extends State<_ConnectionDialogContent> {
     super.initState();
     final provider = context.read<ConnectionProvider>();
     _ipController = TextEditingController(text: provider.ipAddress);
-    _portController = TextEditingController(text: provider.port.toString());
     _localError = widget.initialError;
   }
 
   @override
   void dispose() {
     _ipController.dispose();
-    _portController.dispose();
     super.dispose();
   }
 
@@ -90,17 +87,7 @@ class _ConnectionDialogContentState extends State<_ConnectionDialogContent> {
                   labelText: 'Raspberry Pi IP address',
                   hintText: 'e.g. 192.168.0.25',
                 ),
-                enabled: !isConnecting,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _portController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'WebSocket port',
-                  hintText: '8765',
-                ),
-                enabled: !isConnecting,
+                enabled: true,
               ),
               if (effectiveError != null) ...[
                 const SizedBox(height: 12),
@@ -118,34 +105,33 @@ class _ConnectionDialogContentState extends State<_ConnectionDialogContent> {
           actions: [
             if (widget.allowCancel)
               TextButton(
-                onPressed: isConnecting
-                    ? null
-                    : () {
-                        Navigator.of(context).pop();
-                      },
-                child: const Text('Cancel'),
-              ),
-            if (isConnected)
-              TextButton(
-                onPressed: isConnecting
-                    ? null
-                    : () async {
-                        await provider.disconnect(userInitiated: true);
-                        setState(() {
-                          _localError = null;
-                        });
-                      },
-                child: const Text('Disconnect'),
+                onPressed: () async {
+                  if (isConnecting || isConnected) {
+                    await provider.disconnect(userInitiated: true);
+                    setState(() {
+                      _localError = null;
+                    });
+                  } else {
+                    Navigator.of(context).pop();
+                  }
+                },
+                child: Text(
+                  isConnecting
+                      ? 'Cancel Attempt'
+                      : isConnected
+                      ? 'Disconnect'
+                      : 'Close',
+                ),
               ),
             ElevatedButton(
               onPressed: isConnecting
                   ? null
                   : () async {
-                      final parsedPort =
-                          int.tryParse(_portController.text.trim()) ?? 8765;
+                      final configuredPort = provider.port;
+                      final port = configuredPort > 0 ? configuredPort : 8765;
                       final success = await provider.connect(
                         ip: _ipController.text,
-                        port: parsedPort,
+                        port: port,
                       );
                       if (success) {
                         widget.onConnected();
