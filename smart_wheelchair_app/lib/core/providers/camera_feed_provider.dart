@@ -52,6 +52,18 @@ class CameraFeedProvider extends ChangeNotifier {
           notifyListeners();
         }
         break;
+      case 'camera_stream_status':
+        final state = message['state']?.toString();
+        _streamName = message['stream']?.toString();
+        if (state == 'online') {
+          _error = null;
+        } else if (state == 'offline') {
+          _latestFrame = null;
+          _lastUpdated = null;
+          _error = 'Camera offline';
+        }
+        notifyListeners();
+        break;
       case 'disconnected':
       case 'reconnect_exhausted':
       case 'camera_unregistered':

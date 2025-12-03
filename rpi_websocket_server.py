@@ -1029,7 +1029,14 @@ class WheelchairWebSocketServer:
             print(f"✗ Client disconnected: {client_id} ({exc.code} - {exc.reason})")
         finally:
             self.connected_clients.discard(websocket)
-            self.camera_clients.pop(websocket, None)
+            stream_name = self.camera_clients.pop(websocket, None)
+            if stream_name:
+                await self._broadcast_event({
+                    "type": "camera_stream_status",
+                    "stream": stream_name,
+                    "state": "offline",
+                    "timestamp": time.time(),
+                })
             print(f"  Total clients: {len(self.connected_clients)}")
     
     async def handle_control_message(self, websocket, message: str):
@@ -1157,6 +1164,12 @@ class WheelchairWebSocketServer:
                 if width is not None and height is not None:
                     response["resolution"] = {"width": width, "height": height}
                 await websocket.send(json.dumps(response))
+                await self._broadcast_event({
+                    "type": "camera_stream_status",
+                    "stream": stream_name,
+                    "state": "online",
+                    "timestamp": time.time(),
+                })
 
             elif msg_type == 'camera_unregister':
                 stream_name = self.camera_clients.pop(websocket, None) or data.get('stream')
@@ -1164,6 +1177,13 @@ class WheelchairWebSocketServer:
                     "type": "camera_unregistered",
                     "stream": stream_name,
                 }))
+                if stream_name:
+                    await self._broadcast_event({
+                        "type": "camera_stream_status",
+                        "stream": stream_name,
+                        "state": "offline",
+                        "timestamp": time.time(),
+                    })
 
             elif msg_type == 'camera_frame':
                 frame_data = data.get('data')
