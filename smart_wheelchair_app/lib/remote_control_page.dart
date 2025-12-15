@@ -45,7 +45,9 @@ class RemoteControlPage extends StatelessWidget {
         onPressed: () async {
           final messenger = ScaffoldMessenger.of(context);
           await EmergencyStopService.trigger();
-          messenger.showSnackBar(const SnackBar(content: Text('Emergency stop sent')));
+          messenger.showSnackBar(
+            const SnackBar(content: Text('Emergency stop sent')),
+          );
         },
         child: const Icon(Icons.warning),
       ),

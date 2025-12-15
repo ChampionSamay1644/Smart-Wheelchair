@@ -74,14 +74,20 @@ class _VoiceEnrollmentPageState extends State<VoiceEnrollmentPage> {
 
       switch (type) {
         case 'enrollment_started':
-          final total = (message['total_samples'] as num?)?.toInt() ?? _recommendedSamples;
-          final idx = (message['sample_index'] as num?)?.toInt() ?? (_samplesRecorded + 1);
+          final total =
+              (message['total_samples'] as num?)?.toInt() ??
+              _recommendedSamples;
+          final idx =
+              (message['sample_index'] as num?)?.toInt() ??
+              (_samplesRecorded + 1);
           final prompt = message['recommended_prompt']?.toString();
           setState(() {
             _isProcessing = false;
             _recommendedSamples = total;
             _activeSampleIndex = idx;
-            _currentPrompt = prompt ?? _promptPhrases[(idx - 1) % _promptPhrases.length]['phrase']!;
+            _currentPrompt =
+                prompt ??
+                _promptPhrases[(idx - 1) % _promptPhrases.length]['phrase']!;
             _statusMessage = 'Recording sample $idx of $total... Speak clearly';
           });
           break;
@@ -94,8 +100,12 @@ class _VoiceEnrollmentPageState extends State<VoiceEnrollmentPage> {
           break;
 
         case 'enrollment_sample_received':
-          final recorded = (message['samples_recorded'] as num?)?.toInt() ?? (_samplesRecorded + 1);
-          final total = (message['total_samples'] as num?)?.toInt() ?? _recommendedSamples;
+          final recorded =
+              (message['samples_recorded'] as num?)?.toInt() ??
+              (_samplesRecorded + 1);
+          final total =
+              (message['total_samples'] as num?)?.toInt() ??
+              _recommendedSamples;
           final prompt = message['recommended_prompt']?.toString();
           final infoMessage = message['message']?.toString();
           setState(() {
@@ -104,8 +114,11 @@ class _VoiceEnrollmentPageState extends State<VoiceEnrollmentPage> {
             _activeSampleIndex = null;
             _samplesRecorded = recorded;
             _recommendedSamples = total;
-            _currentPrompt = prompt ?? _promptPhrases[recorded % _promptPhrases.length]['phrase']!;
-            _statusMessage = infoMessage ??
+            _currentPrompt =
+                prompt ??
+                _promptPhrases[recorded % _promptPhrases.length]['phrase']!;
+            _statusMessage =
+                infoMessage ??
                 'Sample $recorded saved. ${total - recorded} more recommended.';
           });
           _showSnackBar('Sample $recorded saved.');
@@ -113,8 +126,12 @@ class _VoiceEnrollmentPageState extends State<VoiceEnrollmentPage> {
 
         case 'enrollment_success':
           final name = message['speaker_name']?.toString() ?? 'user';
-          final recorded = (message['samples_recorded'] as num?)?.toInt() ?? _samplesRecorded;
-          final total = (message['total_samples'] as num?)?.toInt() ?? _recommendedSamples;
+          final recorded =
+              (message['samples_recorded'] as num?)?.toInt() ??
+              _samplesRecorded;
+          final total =
+              (message['total_samples'] as num?)?.toInt() ??
+              _recommendedSamples;
           setState(() {
             _isProcessing = false;
             _isRecording = false;
@@ -122,7 +139,8 @@ class _VoiceEnrollmentPageState extends State<VoiceEnrollmentPage> {
             _samplesRecorded = recorded;
             _recommendedSamples = total < 3 ? 3 : total;
             _currentPrompt =
-                _promptPhrases[_samplesRecorded % _promptPhrases.length]['phrase']!;
+                _promptPhrases[_samplesRecorded %
+                    _promptPhrases.length]['phrase']!;
             _statusMessage = 'Success! Voice profile created for $name';
           });
           _nameController.text = name;
@@ -188,7 +206,8 @@ class _VoiceEnrollmentPageState extends State<VoiceEnrollmentPage> {
 
     try {
       final sampleIndex = _samplesRecorded + 1;
-      final promptData = _promptPhrases[(sampleIndex - 1) % _promptPhrases.length];
+      final promptData =
+          _promptPhrases[(sampleIndex - 1) % _promptPhrases.length];
       final promptPhrase = promptData['phrase']!;
       final promptLabel = promptData['label']!;
 
@@ -224,7 +243,7 @@ class _VoiceEnrollmentPageState extends State<VoiceEnrollmentPage> {
         _activeSampleIndex = sampleIndex;
         _currentPrompt = promptPhrase;
         _statusMessage =
-          'Recording sample $sampleIndex of $_recommendedSamples...\nSpeak ($promptLabel): "$promptPhrase"';
+            'Recording sample $sampleIndex of $_recommendedSamples...\nSpeak ($promptLabel): "$promptPhrase"';
       });
 
       // Auto-stop after 5 seconds
@@ -332,7 +351,9 @@ class _VoiceEnrollmentPageState extends State<VoiceEnrollmentPage> {
 
   void _addOptionalSample() {
     if (_isRecording || _isProcessing) {
-      _showSnackBar('Wait for the current step to finish before adding another sample');
+      _showSnackBar(
+        'Wait for the current step to finish before adding another sample',
+      );
       return;
     }
 
@@ -493,7 +514,9 @@ class _VoiceEnrollmentPageState extends State<VoiceEnrollmentPage> {
                   Text('1. Enter your name (lowercase, no spaces)'),
                   Text('2. Select your gender'),
                   Text('3. Tap "Record Sample" (repeat at least 3 times)'),
-                  Text('4. Speak the suggested phrase (rotate languages each time)'),
+                  Text(
+                    '4. Speak the suggested phrase (rotate languages each time)',
+                  ),
                   Text('5. Tap "Finish Enrollment" once you are satisfied'),
                 ],
               ),
@@ -533,8 +556,9 @@ class _VoiceEnrollmentPageState extends State<VoiceEnrollmentPage> {
                     label: const Text('Add Optional Sample'),
                   ),
                   OutlinedButton.icon(
-                    onPressed:
-                        (_samplesRecorded == 0 || _isRecording) ? null : _finishEnrollmentEarly,
+                    onPressed: (_samplesRecorded == 0 || _isRecording)
+                        ? null
+                        : _finishEnrollmentEarly,
                     icon: const Icon(Icons.done_all),
                     label: const Text('Finish Enrollment'),
                   ),

@@ -138,7 +138,9 @@ class _JoystickControlPageState extends State<JoystickControlPage> {
           final messenger = ScaffoldMessenger.of(context);
           await EmergencyStopService.trigger();
           if (!mounted) return;
-          messenger.showSnackBar(const SnackBar(content: Text('Emergency stop sent')));
+          messenger.showSnackBar(
+            const SnackBar(content: Text('Emergency stop sent')),
+          );
         },
         child: const Icon(Icons.warning),
       ),

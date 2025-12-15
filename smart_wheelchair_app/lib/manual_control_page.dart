@@ -163,7 +163,9 @@ class ManualControlPage extends StatelessWidget {
     try {
       await provider.sendManualCommand(command);
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Failed to send command: $e')));
+      messenger.showSnackBar(
+        SnackBar(content: Text('Failed to send command: $e')),
+      );
     }
   }
 }

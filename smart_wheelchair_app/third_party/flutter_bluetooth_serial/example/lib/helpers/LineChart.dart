@@ -161,9 +161,9 @@ class LineChart extends StatelessWidget {
           argumentsLabels: argumentsLabels,
           values: values,
           valuesLabels: valuesLabels,
-            horizontalLabelsTextStyle:
-              horizontalLabelsTextStyle ?? Theme.of(context).textTheme.bodySmall,
-            verticalLabelsTextStyle:
+          horizontalLabelsTextStyle: horizontalLabelsTextStyle ??
+              Theme.of(context).textTheme.bodySmall,
+          verticalLabelsTextStyle:
               verticalLabelsTextStyle ?? Theme.of(context).textTheme.bodySmall,
           horizontalLinesPaint: horizontalLinesPaint,
           verticalLinesPaint: verticalLinesPaint,
