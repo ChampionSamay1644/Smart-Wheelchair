@@ -92,11 +92,11 @@ class ManualControlPage extends StatelessWidget {
                       vertical: 16,
                     ),
                   ),
-                    onPressed: isConnected
+                  onPressed: isConnected
                       ? () => _sendCommand(context, 'stop')
                       : null,
-                    icon: const Icon(Icons.stop_circle_outlined),
-                    label: Text(tr(context, 'stop')),
+                  icon: const Icon(Icons.stop_circle_outlined),
+                  label: Text(tr(context, 'stop')),
                 ),
               ],
             );
@@ -105,14 +105,12 @@ class ManualControlPage extends StatelessWidget {
       ),
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.red,
-          onPressed: () async {
-            final messenger = ScaffoldMessenger.of(context);
-            final message = tr(context, 'emergency_stop_sent');
-            await EmergencyStopService.trigger();
-            messenger.showSnackBar(
-              SnackBar(content: Text(message)),
-            );
-          },
+        onPressed: () async {
+          final messenger = ScaffoldMessenger.of(context);
+          final message = tr(context, 'emergency_stop_sent');
+          await EmergencyStopService.trigger();
+          messenger.showSnackBar(SnackBar(content: Text(message)));
+        },
         child: const Icon(Icons.warning),
       ),
     );

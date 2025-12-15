@@ -43,13 +43,11 @@ class RemoteControlPage extends StatelessWidget {
       ),
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.red,
-          onPressed: () async {
+        onPressed: () async {
           final messenger = ScaffoldMessenger.of(context);
           final message = tr(context, 'emergency_stop_sent');
           await EmergencyStopService.trigger();
-          messenger.showSnackBar(
-            SnackBar(content: Text(message)),
-          );
+          messenger.showSnackBar(SnackBar(content: Text(message)));
         },
         child: const Icon(Icons.warning),
       ),
@@ -82,7 +80,7 @@ class RemoteControlPage extends StatelessWidget {
                 child: Icon(icon, color: color, size: 32),
               ),
               const SizedBox(width: 16),
-                Expanded(
+              Expanded(
                 child: Text(
                   '${tr(context, 'go_to')} $destination',
                   style: const TextStyle(

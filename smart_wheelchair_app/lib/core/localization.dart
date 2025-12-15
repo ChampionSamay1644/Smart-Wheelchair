@@ -29,7 +29,8 @@ const Map<String, Map<String, String>> _t = {
     'living_room': 'Living Room',
     'streaming_motion': 'Streaming motion via joystick',
     'bluetooth_connected': 'Bluetooth connected',
-    'connect_bluetooth': 'Connect to wheelchair over Bluetooth to enable joystick control',
+    'connect_bluetooth':
+        'Connect to wheelchair over Bluetooth to enable joystick control',
     'not_connected': 'Not connected',
     'settings': 'Settings',
     'wheelchair_configuration': 'Wheelchair Configuration',
@@ -70,7 +71,8 @@ const Map<String, Map<String, String>> _t = {
     'living_room': 'बैठक कक्ष',
     'streaming_motion': 'जॉयस्टिक के माध्यम से मूवमेंट भेजा जा रहा है',
     'bluetooth_connected': 'ब्लूटूथ जुड़ा हुआ',
-    'connect_bluetooth': 'जॉयस्टिक नियंत्रण सक्षम करने के लिए व्हीलचेयर से ब्लूटूथ कनेक्ट करें',
+    'connect_bluetooth':
+        'जॉयस्टिक नियंत्रण सक्षम करने के लिए व्हीलचेयर से ब्लूटूथ कनेक्ट करें',
     'not_connected': 'अवचार्य नहीं',
     'settings': 'सेटिंग्स',
     'wheelchair_configuration': 'व्हीलचेयर कॉन्फिगरेशन',
@@ -111,7 +113,8 @@ const Map<String, Map<String, String>> _t = {
     'living_room': 'लिव्हिंग रूम',
     'streaming_motion': 'जॉयस्टिकद्वारे हालचाल पाठविली जात आहे',
     'bluetooth_connected': 'ब्लूटूथ जोडले',
-    'connect_bluetooth': 'जॉयस्टिक नियंत्रण सक्षम करण्यासाठी व्हीलचेयरशी ब्लूटूथ कनेक्ट करा',
+    'connect_bluetooth':
+        'जॉयस्टिक नियंत्रण सक्षम करण्यासाठी व्हीलचेयरशी ब्लूटूथ कनेक्ट करा',
     'not_connected': 'कनेक्ट नाही',
     'settings': 'सेटिंग्ज',
     'wheelchair_configuration': 'व्हीलचेअर कॉन्फिगरेशन',

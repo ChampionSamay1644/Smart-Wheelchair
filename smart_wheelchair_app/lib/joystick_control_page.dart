@@ -45,13 +45,13 @@ class _JoystickControlPageState extends State<JoystickControlPage> {
         ],
       ),
       body: Consumer<BluetoothProvider>(
-            builder: (context, provider, _) {
-            final isConnected = provider.isConnected;
-            final statusText = isConnected
-            ? provider.movementState == 'moving'
-              ? tr(context, 'streaming_motion')
-              : tr(context, 'bluetooth_connected')
-            : tr(context, 'connect_bluetooth');
+        builder: (context, provider, _) {
+          final isConnected = provider.isConnected;
+          final statusText = isConnected
+              ? provider.movementState == 'moving'
+                    ? tr(context, 'streaming_motion')
+                    : tr(context, 'bluetooth_connected')
+              : tr(context, 'connect_bluetooth');
 
           return Column(
             mainAxisAlignment: MainAxisAlignment.center,
