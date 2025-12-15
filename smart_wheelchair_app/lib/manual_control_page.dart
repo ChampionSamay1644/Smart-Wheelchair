@@ -105,8 +105,9 @@ class ManualControlPage extends StatelessWidget {
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.red,
         onPressed: () async {
+          final messenger = ScaffoldMessenger.of(context);
           await EmergencyStopService.trigger();
-          ScaffoldMessenger.of(context).showSnackBar(
+          messenger.showSnackBar(
             const SnackBar(content: Text('Emergency stop sent')),
           );
         },
@@ -148,9 +149,10 @@ class ManualControlPage extends StatelessWidget {
   }
 
   Future<void> _sendCommand(BuildContext context, String command) async {
+    final messenger = ScaffoldMessenger.of(context);
     final provider = context.read<BluetoothProvider>();
     if (!provider.isConnected) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         const SnackBar(
           content: Text('Connect to the wheelchair over Bluetooth first.'),
         ),
@@ -161,9 +163,7 @@ class ManualControlPage extends StatelessWidget {
     try {
       await provider.sendManualCommand(command);
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to send command: $e')));
+      messenger.showSnackBar(SnackBar(content: Text('Failed to send command: $e')));
     }
   }
 }
@@ -196,7 +196,7 @@ class _StatusBanner extends StatelessWidget {
         trailing: activeCommand != null
             ? Chip(
                 label: Text(activeCommand!.toUpperCase()),
-                backgroundColor: Colors.blue.withOpacity(0.1),
+                backgroundColor: Colors.blue.withAlpha((0.1 * 255).round()),
               )
             : null,
       ),

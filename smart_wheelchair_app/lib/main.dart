@@ -362,8 +362,10 @@ class _MyHomePageState extends State<MyHomePage> {
         child: FloatingActionButton(
           backgroundColor: Colors.red,
           onPressed: () async {
+            final messenger = ScaffoldMessenger.of(context);
             await EmergencyStopService.trigger();
-            ScaffoldMessenger.of(context).showSnackBar(
+            if (!mounted) return;
+            messenger.showSnackBar(
               const SnackBar(
                 content: Text('Emergency stop sent'),
                 backgroundColor: Colors.red,

@@ -224,7 +224,7 @@ class _VoiceEnrollmentPageState extends State<VoiceEnrollmentPage> {
         _activeSampleIndex = sampleIndex;
         _currentPrompt = promptPhrase;
         _statusMessage =
-            'Recording sample $sampleIndex of $_recommendedSamples...\nSpeak (${promptLabel}): "$promptPhrase"';
+          'Recording sample $sampleIndex of $_recommendedSamples...\nSpeak ($promptLabel): "$promptPhrase"';
       });
 
       // Auto-stop after 5 seconds

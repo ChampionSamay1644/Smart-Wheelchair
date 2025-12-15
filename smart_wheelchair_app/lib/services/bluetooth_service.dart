@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 import 'dart:math' as math;
-import 'dart:typed_data';
+// `Uint8List` is provided via `package:flutter/foundation.dart` so explicit import not required
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
@@ -281,7 +281,7 @@ class WheelchairBluetoothService {
     }
 
     try {
-      final frame = jsonEncode(payload) + '\n';
+      final frame = '${jsonEncode(payload)}\n';
       connection.output.add(Uint8List.fromList(frame.codeUnits));
       await connection.output.allSent;
     } catch (error) {

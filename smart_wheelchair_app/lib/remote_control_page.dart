@@ -43,10 +43,9 @@ class RemoteControlPage extends StatelessWidget {
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.red,
         onPressed: () async {
+          final messenger = ScaffoldMessenger.of(context);
           await EmergencyStopService.trigger();
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('Emergency stop sent')));
+          messenger.showSnackBar(const SnackBar(content: Text('Emergency stop sent')));
         },
         child: const Icon(Icons.warning),
       ),

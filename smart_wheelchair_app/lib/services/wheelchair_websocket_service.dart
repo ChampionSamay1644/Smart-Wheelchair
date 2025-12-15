@@ -161,8 +161,7 @@ class WheelchairWebSocketService {
       'type': 'reconnecting',
       'attempt': _reconnectAttempts,
       'max_attempts': _maxReconnectAttempts,
-      'message':
-          'Attempting reconnect (${_reconnectAttempts}/$_maxReconnectAttempts)...',
+      'message': 'Attempting reconnect ($_reconnectAttempts/$_maxReconnectAttempts)...',
     });
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(_reconnectDelay, () async {
