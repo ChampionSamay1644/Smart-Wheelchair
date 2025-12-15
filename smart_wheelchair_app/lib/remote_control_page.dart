@@ -3,13 +3,14 @@
 import 'package:flutter/material.dart';
 
 import 'services/emergency_stop_service.dart';
+import 'core/localization.dart';
 
 class RemoteControlPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Remote Control'),
+        title: Text(tr(context, 'remote_control')),
         backgroundColor: Theme.of(context).primaryColor,
       ),
       body: ListView(
@@ -17,7 +18,7 @@ class RemoteControlPage extends StatelessWidget {
         children: [
           _buildDestinationCard(
             context,
-            'Kitchen',
+            tr(context, 'kitchen'),
             Icons.kitchen,
             Colors.orange,
             () => print('Selected: Go to Kitchen'),
@@ -25,7 +26,7 @@ class RemoteControlPage extends StatelessWidget {
           const SizedBox(height: 12),
           _buildDestinationCard(
             context,
-            'Bedroom',
+            tr(context, 'bedroom'),
             Icons.bedroom_parent,
             Colors.blue,
             () => print('Selected: Go to Bedroom'),
@@ -33,7 +34,7 @@ class RemoteControlPage extends StatelessWidget {
           const SizedBox(height: 12),
           _buildDestinationCard(
             context,
-            'Living Room',
+            tr(context, 'living_room'),
             Icons.living,
             Colors.green,
             () => print('Selected: Go to Living Room'),
@@ -42,11 +43,12 @@ class RemoteControlPage extends StatelessWidget {
       ),
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.red,
-        onPressed: () async {
+          onPressed: () async {
           final messenger = ScaffoldMessenger.of(context);
+          final message = tr(context, 'emergency_stop_sent');
           await EmergencyStopService.trigger();
           messenger.showSnackBar(
-            const SnackBar(content: Text('Emergency stop sent')),
+            SnackBar(content: Text(message)),
           );
         },
         child: const Icon(Icons.warning),
@@ -80,9 +82,9 @@ class RemoteControlPage extends StatelessWidget {
                 child: Icon(icon, color: color, size: 32),
               ),
               const SizedBox(width: 16),
-              Expanded(
+                Expanded(
                 child: Text(
-                  'Go to $destination',
+                  '${tr(context, 'go_to')} $destination',
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,

@@ -21,6 +21,8 @@ import 'remote_control_page.dart';
 import 'settings_page.dart';
 import 'voice_control_page.dart';
 import 'services/emergency_stop_service.dart';
+import 'core/providers/locale_provider.dart';
+import 'core/localization.dart';
 
 void main() {
   runApp(
@@ -30,6 +32,7 @@ void main() {
         ChangeNotifierProvider(create: (_) => ConnectionProvider()),
         ChangeNotifierProvider(create: (_) => CameraFeedProvider()),
         ChangeNotifierProvider(create: (_) => BluetoothProvider()),
+        ChangeNotifierProvider(create: (_) => LocaleProvider()),
       ],
       child: const MyApp(),
     ),
@@ -129,31 +132,29 @@ class _MyHomePageState extends State<MyHomePage> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).primaryColor,
-        title: const FittedBox(
-          fit: BoxFit.scaleDown,
-          alignment: Alignment.centerLeft,
-          child: Text(
-            'Smart Wheelchair',
-            style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 24,
-            ),
-          ),
-        ),
         elevation: 4,
+        // Title with app logo and localized title
+        title: Row(
+          children: [
+            // asset logo with fallback
+            Image.asset(
+              'assets/logo.png',
+              height: 36,
+              errorBuilder: (context, error, stackTrace) =>
+                  const FlutterLogo(size: 36),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              tr(context, 'app_title'),
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
         actions: [
-          IconButton(
-            icon: const Icon(
-              Icons.help,
-              color: Colors.white,
-            ), // Request Help icon
-            onPressed: () {
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(const SnackBar(content: Text('Help requested!')));
-            },
-          ),
           const _ConnectionStatusAction(),
           const _BluetoothStatusAction(),
           IconButton(
@@ -163,6 +164,34 @@ class _MyHomePageState extends State<MyHomePage> {
             },
           ),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(48),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 16.0,
+              vertical: 8.0,
+            ),
+            child: Row(
+              children: [
+                DropdownButton<String>(
+                  value: context.watch<LocaleProvider>().locale,
+                  underline: const SizedBox(),
+                  items: const [
+                    DropdownMenuItem(value: 'en', child: Text('English')),
+                    DropdownMenuItem(value: 'hi', child: Text('हिन्दी')),
+                    DropdownMenuItem(value: 'mr', child: Text('मराठी')),
+                  ],
+                  onChanged: (code) {
+                    if (code != null) {
+                      context.read<LocaleProvider>().setLocale(code);
+                    }
+                  },
+                ),
+                const Spacer(),
+              ],
+            ),
+          ),
+        ),
       ),
       drawer: Drawer(
         child: ListView(
@@ -171,23 +200,23 @@ class _MyHomePageState extends State<MyHomePage> {
             DrawerHeader(
               decoration: BoxDecoration(color: Colors.blue),
               child: Text(
-                'Patient Menu',
+                tr(context, 'patient_menu'),
                 style: TextStyle(color: Colors.white, fontSize: 24),
               ),
             ),
             ListTile(
               leading: Icon(Icons.health_and_safety),
-              title: Text('Health Status'),
+              title: Text(tr(context, 'health_status')),
               onTap: () => Navigator.pushNamed(context, '/health_status'),
             ),
             ListTile(
               leading: Icon(Icons.settings),
-              title: Text('Settings'),
+              title: Text(tr(context, 'settings')),
               onTap: () => Navigator.pushNamed(context, '/settings'),
             ),
             ListTile(
               leading: Icon(Icons.logout),
-              title: Text('Logout'),
+              title: Text(tr(context, 'logout')),
               onTap: () async {
                 await context.read<AuthProvider>().logout();
                 if (!context.mounted) return;
@@ -202,7 +231,8 @@ class _MyHomePageState extends State<MyHomePage> {
           Expanded(
             flex: 1,
             child: Container(
-              margin: const EdgeInsets.all(16),
+              // move camera down slightly by increasing top margin
+              margin: const EdgeInsets.fromLTRB(16, 24, 16, 16),
               decoration: BoxDecoration(
                 color: Colors.black87,
                 borderRadius: BorderRadius.circular(20),
@@ -295,16 +325,16 @@ class _MyHomePageState extends State<MyHomePage> {
           Expanded(
             flex: 1,
             child: Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(14),
               child: GridView.count(
                 crossAxisCount: 2,
                 childAspectRatio: 1,
-                mainAxisSpacing: 16,
-                crossAxisSpacing: 16,
+                mainAxisSpacing: 14,
+                crossAxisSpacing: 14,
                 children: [
                   _buildControlButton(
                     context,
-                    'Remote Control',
+                    tr(context, 'remote_control'),
                     Icons.route,
                     Colors.blue[700]!,
                     () => Navigator.push(
@@ -316,7 +346,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                   _buildControlButton(
                     context,
-                    'Manual Control',
+                    tr(context, 'manual_control'),
                     Icons.gamepad,
                     Colors.green[700]!,
                     () => Navigator.push(
@@ -328,7 +358,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                   _buildControlButton(
                     context,
-                    'Joystick Control',
+                    tr(context, 'joystick_control'),
                     Icons.sports_esports,
                     Colors.purple[700]!,
                     () => Navigator.push(
@@ -340,7 +370,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                   _buildControlButton(
                     context,
-                    'Voice Control',
+                    tr(context, 'voice_control'),
                     Icons.mic,
                     Colors.orange[700]!,
                     () => Navigator.push(
@@ -393,7 +423,7 @@ class _MyHomePageState extends State<MyHomePage> {
           end: Alignment.bottomRight,
           colors: [color, color.withAlpha((0.8 * 255).round())],
         ),
-        borderRadius: BorderRadius.circular(15),
+        borderRadius: BorderRadius.circular(13),
         boxShadow: [
           BoxShadow(
             color: color.withAlpha((0.8 * 255).round()),
@@ -406,17 +436,17 @@ class _MyHomePageState extends State<MyHomePage> {
         color: Colors.transparent,
         child: InkWell(
           onTap: onPressed,
-          borderRadius: BorderRadius.circular(15),
+          borderRadius: BorderRadius.circular(13),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 40, color: Colors.white),
-              const SizedBox(height: 8),
+              Icon(icon, size: 30, color: Colors.white),
+              const SizedBox(height: 4),
               Text(
                 label,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 16,
+                  fontSize: 12,
                   fontWeight: FontWeight.bold,
                 ),
               ),

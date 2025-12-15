@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'core/providers/bluetooth_provider.dart';
+import 'core/localization.dart';
 import 'services/emergency_stop_service.dart';
 
 class ManualControlPage extends StatelessWidget {
@@ -11,12 +12,12 @@ class ManualControlPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Manual Control'),
+        title: Text(tr(context, 'manual_control')),
         backgroundColor: Theme.of(context).primaryColor,
         actions: [
           IconButton(
             icon: const Icon(Icons.settings_bluetooth),
-            tooltip: 'Bluetooth settings',
+            tooltip: tr(context, 'bluetooth_settings'),
             onPressed: () =>
                 Navigator.pushNamed(context, '/bluetooth_connection'),
           ),
@@ -49,7 +50,7 @@ class ManualControlPage extends StatelessWidget {
                 _buildDirectionButton(
                   context,
                   icon: Icons.arrow_upward,
-                  label: 'Forward',
+                  label: tr(context, 'forward'),
                   command: 'forward',
                   enabled: isConnected && activeCommand != 'forward',
                 ),
@@ -60,7 +61,7 @@ class ManualControlPage extends StatelessWidget {
                     _buildDirectionButton(
                       context,
                       icon: Icons.arrow_back,
-                      label: 'Left',
+                      label: tr(context, 'left'),
                       command: 'left',
                       enabled: isConnected && activeCommand != 'left',
                     ),
@@ -68,7 +69,7 @@ class ManualControlPage extends StatelessWidget {
                     _buildDirectionButton(
                       context,
                       icon: Icons.arrow_forward,
-                      label: 'Right',
+                      label: tr(context, 'right'),
                       command: 'right',
                       enabled: isConnected && activeCommand != 'right',
                     ),
@@ -78,7 +79,7 @@ class ManualControlPage extends StatelessWidget {
                 _buildDirectionButton(
                   context,
                   icon: Icons.arrow_downward,
-                  label: 'Backward',
+                  label: tr(context, 'backward'),
                   command: 'backward',
                   enabled: isConnected && activeCommand != 'backward',
                 ),
@@ -91,11 +92,11 @@ class ManualControlPage extends StatelessWidget {
                       vertical: 16,
                     ),
                   ),
-                  onPressed: isConnected
+                    onPressed: isConnected
                       ? () => _sendCommand(context, 'stop')
                       : null,
-                  icon: const Icon(Icons.stop_circle_outlined),
-                  label: const Text('Stop'),
+                    icon: const Icon(Icons.stop_circle_outlined),
+                    label: Text(tr(context, 'stop')),
                 ),
               ],
             );
@@ -104,13 +105,14 @@ class ManualControlPage extends StatelessWidget {
       ),
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.red,
-        onPressed: () async {
-          final messenger = ScaffoldMessenger.of(context);
-          await EmergencyStopService.trigger();
-          messenger.showSnackBar(
-            const SnackBar(content: Text('Emergency stop sent')),
-          );
-        },
+          onPressed: () async {
+            final messenger = ScaffoldMessenger.of(context);
+            final message = tr(context, 'emergency_stop_sent');
+            await EmergencyStopService.trigger();
+            messenger.showSnackBar(
+              SnackBar(content: Text(message)),
+            );
+          },
         child: const Icon(Icons.warning),
       ),
     );

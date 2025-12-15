@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'core/providers/bluetooth_provider.dart';
+import 'core/localization.dart';
 import 'services/emergency_stop_service.dart';
 
 class JoystickControlPage extends StatefulWidget {
@@ -32,7 +33,7 @@ class _JoystickControlPageState extends State<JoystickControlPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Joystick Control'),
+        title: Text(tr(context, 'joystick_control')),
         backgroundColor: Theme.of(context).primaryColor,
         actions: [
           IconButton(
@@ -44,13 +45,13 @@ class _JoystickControlPageState extends State<JoystickControlPage> {
         ],
       ),
       body: Consumer<BluetoothProvider>(
-        builder: (context, provider, _) {
-          final isConnected = provider.isConnected;
-          final statusText = isConnected
-              ? provider.movementState == 'moving'
-                    ? 'Streaming motion via joystick'
-                    : 'Bluetooth connected'
-              : 'Connect to wheelchair over Bluetooth to enable joystick control';
+            builder: (context, provider, _) {
+            final isConnected = provider.isConnected;
+            final statusText = isConnected
+            ? provider.movementState == 'moving'
+              ? tr(context, 'streaming_motion')
+              : tr(context, 'bluetooth_connected')
+            : tr(context, 'connect_bluetooth');
 
           return Column(
             mainAxisAlignment: MainAxisAlignment.center,

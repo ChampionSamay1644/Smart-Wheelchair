@@ -3,22 +3,23 @@
 import 'package:flutter/material.dart';
 
 import 'widgets/connection_dialog.dart';
+import 'core/localization.dart';
 
 class SettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Settings'),
+        title: Text(tr(context, 'settings')),
         backgroundColor: Theme.of(context).primaryColor,
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _buildSection('Wheelchair Configuration', [
+          _buildSection(tr(context, 'wheelchair_configuration'), [
             _buildSettingItem(
               context,
-              'Speed Control',
+              tr(context, 'speed_control'),
               Icons.speed,
               'Adjust maximum speed limit',
               onTap: () {
@@ -27,7 +28,7 @@ class SettingsPage extends StatelessWidget {
             ),
             _buildSettingItem(
               context,
-              'Sensitivity',
+              tr(context, 'sensitivity'),
               Icons.tune,
               'Adjust control sensitivity',
               onTap: () {
@@ -36,10 +37,10 @@ class SettingsPage extends StatelessWidget {
             ),
           ]),
           const SizedBox(height: 20),
-          _buildSection('User Preferences', [
+          _buildSection(tr(context, 'user_preferences'), [
             _buildSettingItem(
               context,
-              'Emergency Contacts',
+              tr(context, 'emergency_contacts'),
               Icons.emergency,
               'Add or edit emergency contacts',
               onTap: () {
@@ -48,7 +49,7 @@ class SettingsPage extends StatelessWidget {
             ),
             _buildSettingItem(
               context,
-              'Voice Commands',
+              tr(context, 'voice_commands'),
               Icons.record_voice_over,
               'Customize voice commands',
               onTap: () {
@@ -58,10 +59,10 @@ class SettingsPage extends StatelessWidget {
             ),
           ]),
           const SizedBox(height: 20),
-          _buildSection('System', [
+          _buildSection(tr(context, 'system'), [
             _buildSettingItem(
               context,
-              'Device Info',
+              tr(context, 'device_info'),
               Icons.info,
               'View system information',
               onTap: () {
@@ -70,7 +71,7 @@ class SettingsPage extends StatelessWidget {
             ),
             _buildSettingItem(
               context,
-              'Bluetooth Control',
+              tr(context, 'bluetooth_control'),
               Icons.bluetooth,
               'Pair and monitor wheelchair connection',
               onTap: () {
@@ -79,7 +80,7 @@ class SettingsPage extends StatelessWidget {
             ),
             _buildSettingItem(
               context,
-              'Connection Status',
+              tr(context, 'connection_status'),
               Icons.bluetooth,
               'Check device connectivity',
               onTap: () {
@@ -88,7 +89,7 @@ class SettingsPage extends StatelessWidget {
             ),
             _buildSettingItem(
               context,
-              'Battery',
+              tr(context, 'battery'),
               Icons.battery_full,
               'View battery status',
               onTap: () {
@@ -99,13 +100,13 @@ class SettingsPage extends StatelessWidget {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const ListTile(
-                          leading: Icon(
+                        ListTile(
+                          leading: const Icon(
                             Icons.battery_full,
                             color: Colors.green,
                           ),
-                          title: Text('Battery Level: 75%'),
-                          subtitle: Text('Estimated 4 hours remaining'),
+                          title: Text(tr(context, 'battery_level')),
+                          subtitle: Text(tr(context, 'battery_estimate')),
                         ),
                         const LinearProgressIndicator(
                           value: 0.75,
@@ -117,7 +118,7 @@ class SettingsPage extends StatelessWidget {
                         const SizedBox(height: 16),
                         TextButton(
                           onPressed: () => Navigator.pop(context),
-                          child: const Text('Close'),
+                          child: Text(tr(context, 'close')),
                         ),
                       ],
                     ),

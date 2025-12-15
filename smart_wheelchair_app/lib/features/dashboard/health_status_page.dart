@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/localization.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
@@ -15,7 +16,7 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Health Status')),
+      appBar: AppBar(title: Text(tr(context, 'health_status'))),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
