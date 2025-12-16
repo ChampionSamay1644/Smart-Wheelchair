@@ -178,17 +178,18 @@ class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
       }
 
       _positionSub?.cancel();
-      _positionSub = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.best,
-          distanceFilter: 5,
-        ),
-      ).listen((pos) {
-        if (!mounted) return;
-        setState(() {
-          _currentPosition = LatLng(pos.latitude, pos.longitude);
-        });
-      });
+      _positionSub =
+          Geolocator.getPositionStream(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.best,
+              distanceFilter: 5,
+            ),
+          ).listen((pos) {
+            if (!mounted) return;
+            setState(() {
+              _currentPosition = LatLng(pos.latitude, pos.longitude);
+            });
+          });
 
       setState(() {
         _isNavigating = true;
