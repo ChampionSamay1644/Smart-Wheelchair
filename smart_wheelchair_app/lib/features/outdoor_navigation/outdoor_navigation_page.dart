@@ -27,8 +27,8 @@ class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
   List<LatLng> _routePoints = [];
 
   bool _isNavigating = false;
-  Timer? _navTimer;
-  int _navIndex = 0;
+  StreamSubscription<Position>? _positionSub;
+  bool _isPaused = false;
 
   final LatLng _fallbackPosition = LatLng(28.7041, 77.1025);
 
@@ -40,7 +40,7 @@ class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
 
   @override
   void dispose() {
-    _navTimer?.cancel();
+    _positionSub?.cancel();
     super.dispose();
   }
 
@@ -160,35 +160,66 @@ class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
     }
   }
 
-  void _startNavigation() {
-    if (_routePoints.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('No route to navigate')));
-      return;
-    }
+  void _startNavigation() async {
+    // start real GPS tracking via a position stream
+    try {
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
 
-    _navTimer?.cancel();
-    _navIndex = 0;
-    setState(() => _isNavigating = true);
-
-    _navTimer = Timer.periodic(const Duration(seconds: 2), (t) {
-      if (_navIndex >= _routePoints.length) {
-        _stopNavigation();
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Arrived at destination')));
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Location permission required')),
+        );
         return;
       }
-      setState(() => _currentPosition = _routePoints[_navIndex]);
-      _navIndex += 1;
-    });
+
+      _positionSub?.cancel();
+      _positionSub = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.best,
+          distanceFilter: 5,
+        ),
+      ).listen((pos) {
+        if (!mounted) return;
+        setState(() {
+          _currentPosition = LatLng(pos.latitude, pos.longitude);
+        });
+      });
+
+      setState(() {
+        _isNavigating = true;
+        _isPaused = false;
+      });
+    } catch (e) {
+      print('Failed to start navigation: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to start navigation')),
+      );
+    }
   }
 
   void _stopNavigation() {
-    _navTimer?.cancel();
-    _navTimer = null;
-    setState(() => _isNavigating = false);
+    _positionSub?.cancel();
+    _positionSub = null;
+    setState(() {
+      _isNavigating = false;
+      _isPaused = false;
+    });
+  }
+
+  void _togglePause() {
+    if (_positionSub == null) return;
+    if (_isPaused) {
+      _positionSub!.resume();
+    } else {
+      _positionSub!.pause();
+    }
+    setState(() => _isPaused = !_isPaused);
   }
 
   @override
@@ -207,8 +238,10 @@ class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
           ),
           NavigationControlsWidget(
             isNavigating: _isNavigating,
+            isPaused: _isPaused,
             onStart: _startNavigation,
             onStop: _stopNavigation,
+            onTogglePause: _togglePause,
           ),
           const SizedBox(height: 8),
         ],
