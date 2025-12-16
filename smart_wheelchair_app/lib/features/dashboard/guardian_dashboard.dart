@@ -43,18 +43,18 @@ class GuardianDashboard extends StatelessWidget {
                     children: [
                       Text(
                         'SmartNav',
-                        style: Theme.of(context)
-                            .textTheme
-                            .headlineSmall
-                            ?.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         'Guardian Dashboard',
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodyMedium
-                            ?.copyWith(color: Colors.white70),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
                       ),
                     ],
                   ),
@@ -75,7 +75,10 @@ class GuardianDashboard extends StatelessWidget {
                     onPressed: () async {
                       await context.read<AuthProvider>().logout();
                       if (!context.mounted) return;
-                      Navigator.pushReplacementNamed(context, '/role_selection');
+                      Navigator.pushReplacementNamed(
+                        context,
+                        '/role_selection',
+                      );
                     },
                   ),
                 ],
