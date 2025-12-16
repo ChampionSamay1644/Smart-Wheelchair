@@ -48,7 +48,7 @@ import uuid
 import datetime
 from collections import defaultdict
 from functools import lru_cache
-from typing import Dict, List, Tuple, Optional, Union, Any, TYPE_CHECKING
+from typing import Dict, List, Tuple, Optional, Union, Any, TYPE_CHECKING, Set
 
 import requests
 from dotenv import load_dotenv
@@ -263,6 +263,7 @@ SPEAKER_NOISE_REDUCTION_BLEND = 0.10  # Portion of denoised signal to mix into e
 SPEAKER_EMBED_SEGMENT_SECONDS = 0.95  # Duration per chunk when averaging embeddings
 SPEAKER_EMBED_OVERLAP = 0.45  # Fractional overlap between chunks for embeddings
 STT_NOISE_REDUCTION_BLEND = 0.18  # Blend factor for light denoising before Whisper
+USB_MIC_NOISE_REDUCTION_BLEND = 0.30  # Blend factor used when denoising the USB mic input stream
 SPEAKER_SEGMENT_RMS_RATIO = 0.18  # Minimum % of overall RMS a segment must have to be kept
 SPEAKER_SEGMENT_RMS_FLOOR = 0.007  # Absolute RMS floor for segment inclusion
 SPEAKER_VARIANT_SUPPORT_WINDOW = 0.035  # Score gap within which sibling embeddings reinforce the match
@@ -316,6 +317,7 @@ COMMAND_FILLER_WORDS = {
     "hey",
     "hello",
     "hi",
+        "pude",
     "wheelchair",
     "buddy",
     "samay",
@@ -327,8 +329,13 @@ COMMAND_FILLER_WORDS = {
     "okay",
     "the",
     "a",
+        "pudhechal",
+        "pudechal",
+        "pudhe chal",
+        "pude chal",
     "to",
     "let",
+        "pudeachal",
     "lets",
     "just",
     "now",
@@ -1013,7 +1020,14 @@ def load_local_stt_pipeline(force_autodetect=False):
         processor = None
         model = None
 
-        if model_dir.exists() and (model_dir / "model.safetensors").exists():
+        model_file = None
+        if model_dir.exists():
+            if (model_dir / "model.safetensors").exists():
+                model_file = model_dir / "model.safetensors"
+            elif (model_dir / "pytorch_model.bin").exists():
+                model_file = model_dir / "pytorch_model.bin"
+
+        if model_file is not None:
             try:
                 processor = AutoProcessor.from_pretrained(str(model_dir), local_files_only=True)
                 model = AutoModelForSpeechSeq2Seq.from_pretrained(
@@ -1047,6 +1061,12 @@ def load_local_stt_pipeline(force_autodetect=False):
                 model.eval()
                 print("Successfully downloaded Whisper tiny model")
                 model_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    processor.save_pretrained(str(model_dir))
+                    model.save_pretrained(str(model_dir))
+                    print(f"Cached Whisper tiny model to {model_dir}")
+                except Exception as cache_error:
+                    print(f"Warning: failed to cache Whisper tiny model locally: {cache_error}")
             except Exception as download_error:
                 print(f"Failed to download Whisper tiny model: {download_error}")
                 print("Please ensure the device has internet access or pre-download the model using setup_whisper_tiny.py")
@@ -1482,7 +1502,7 @@ def test_voice_authentication_internal(encoder):
 # --- Global Configuration ---
 SAMPLE_RATE = RS_SAMPLING_RATE  # 16000 Hz
 RECORD_DURATION = 5  # seconds
-SIMILARITY_THRESHOLD = 0.50  # Match threshold for voice authentication
+SIMILARITY_THRESHOLD = 0.00  # Match threshold for voice authentication
 VOICE_DB_PROCESSED_DIR = Path("./voice_db_processed")
 VOICE_DB_EMBEDDINGS_DIR = Path("./voice_db_embeddings")
 DEFAULT_TTS_VOICE_FILE = Path("./tts_outputs/command_response.wav")
@@ -1605,43 +1625,71 @@ WHEELCHAIR_COMMANDS = {
         # English variations
         "forward", "go forward", "move forward", "straight", "move straight", "go straight", 
         "ahead", "go ahead", "move ahead", "onwards", "advance", "proceed",
+        "straight ahead", "head forward", "keep going", "keep moving forward", "keep moving ahead",
+        "move ahead please", "drive forward", "drive straight", "push forward", "keep driving forward",
         # Hindi variations (देवनागरी and romanized)
-        "आगे", "आगे बढ़ो", "आगे जाओ", "आगे चलो", "सीधे", "सीधे जाओ", "सीधे चलो",
-        "aage", "aage badho", "aage jao", "aage chalo", "seedhe", "seedhe jao", "seedhe chalo",
+        "आगे", "आगे बढ़ो", "आगे जाओ", "आगे चलो", "आगे बढ़ो", "आगे बढो", "आगे बढ़ाओ", "आगे बढ़ाओ",
+        "आगे बढ़ाएं", "आगे बढाएं", "सीधे", "सीधे जाओ", "सीधे चलो", "सीधे बढ़ो", "सीधा आगे",
+        "aage", "aage badho", "aage badh jao", "aage badhao", "aage jao", "aage chalo", "aage bado",
+        "aagay badho", "agay badho", "aagay badhao", "agay badhao", "age badho", "age badh jao",
+        "age badhao", "aage barho", "sidha aage", "seedhe", "seedhe jao", "seedhe chalo",
         # Marathi variations
-        "पुढे", "पुढे जा", "पुढे चल", "सरळ", "सरळ जा",
-        "pudhe", "pudhe ja", "pudhe chal", "saral", "saral ja",
-        # Spanish variations
-        "adelante", "sigue adelante", "ve adelante", "recto", "sigue recto",
-        # French variations
-        "avancer", "en avant", "allez tout droit", "droit devant", "aller de l'avant",
-        # German variations
-        "vorwärts", "geradeaus", "nach vorne", "geh vorwärts", "gerade", "weiter",
-        # Italian variations
-        "avanti", "vai avanti", "dritto", "procedere", "muovere in avanti",
-        # Chinese variations (Simplified)
-        "前进", "向前", "直走", "往前", "前方", "直行",
-        # Japanese variations
-        "前進", "前へ", "まっすぐ", "直進", "フォワード",
-        # Russian variations
-        "вперед", "прямо", "вперёд", "двигайся вперёд", "прямо вперёд",
-        # Korean variations
-        "앞으로", "전진", "직진", "앞으로 가", "직진해",
-        # Arabic variations
-        "إلى الأمام", "تقدم", "مباشرة", "للأمام", "تحرك للأمام",
-        # Turkish variations
-        "ileri", "düz", "ilerle", "düz git", "ileri git",
-        # Polish variations
-        "naprzód", "do przodu", "prosto", "jedź prosto", "idź naprzód",
-        # Dutch variations
-        "vooruit", "rechtdoor", "ga vooruit", "recht vooruit", "voorwaarts",
-        # Portuguese variations
-        "frente", "para frente", "em frente", "avançar", "siga em frente",
-        # Swedish variations
-        "framåt", "rakt fram", "gå framåt", "fortsätt framåt", "rakt",
-        # Finnish variations
-        "eteenpäin", "suoraan", "mene eteenpäin", "etene", "suoraan eteenpäin",
-        # Simple phonetic variations that may come from ASR errors
+        "पुढे", "पुढे जा", "पुढे चला", "पुढे चल", "पुढे वाढा", "पुढे सरळ",
+        "सरळ", "सरळ जा", "सरळ चला", "सरळ पुढे",
+        "pudhe", "pudhe ja", "pudhe jaa", "pudhe chal", "pudhe chala", "pudhe vada",
+        "pude", "pude ja", "pude jaa", "pude chal", "pude chala", "pudeachal", "pude aagal",
+        "pude pudhe", "saral", "saral ja", "saral jaa", "saral chala",
+        # Common romanized Marathi/Hindi transliterations produced by translation
+        "sadheval", "sadeval", "sadhe val", "sade val",
+        # Punjabi variations
+        "ਅੱਗੇ ਜਾ", "ਅੱਗੇ ਜਾਓ", "ਅੱਗੇ ਵਧੋ", "ਸਿੱਧੇ ਜਾਓ", "ਸਿੱਧਾ ਚੱਲੋ",
+        "agge jao", "agge ja", "agge vadho", "sidhe jao", "sidha chalo",
+        # Kannada variations
+        "ಮುಂದೆ ಹೋಗಿ", "ಮುಂದಕ್ಕೆ ಹೋಗಿ", "ಮುಂದೆ ಸಾಗು", "ನೇರವಾಗಿ ಹೋಗಿ", "ಮುಂದೆ ಬನ್ನಿ",
+        "munde hogi", "mundakke hogi", "munde saagu", "neravagi hogi", "munde banni",
+        # Bengali variations
+        "সামনে যাও", "সামনে চল", "আগে যাও", "সোজা যাও", "সোজা চল",
+        "shamne jao", "shamne chalo", "age jao", "soja jao", "soja chol",
+        # Gujarati variations
+        "આગળ જાઓ", "આગળ વધો", "આગળ ચાલો", "સીધા જાઓ", "સીધા ચાલો",
+        "agal jao", "agal vadho", "agal chalo", "sidha jao", "sidha chalo",
+        # Tamil variations
+        "முன்னே போ", "முன்னே செல்", "முன்னோக்கி போ", "நேராக போ", "நேராக செல்",
+        "munne po", "munne sel", "munnokki po", "neraga po", "neraga sel",
+        # Urdu variations
+        "آگے جاؤ", "آگے بڑھو", "سامنے چلو", "سیدھا چلو", "سیدھے جاؤ",
+        "aage jao", "aage badho", "samne chalo", "seedha chalo", "seedhe jao",
+        # # Spanish variations
+        # "adelante", "sigue adelante", "ve adelante", "recto", "sigue recto",
+        # # French variations
+        # "avancer", "en avant", "allez tout droit", "droit devant", "aller de l'avant",
+        # # German variations
+        # "vorwärts", "geradeaus", "nach vorne", "geh vorwärts", "gerade", "weiter",
+        # # Italian variations
+        # "avanti", "vai avanti", "dritto", "procedere", "muovere in avanti",
+        # # Chinese variations (Simplified)
+        # "前进", "向前", "直走", "往前", "前方", "直行",
+        # # Japanese variations
+        # "前進", "前へ", "まっすぐ", "直進", "フォワード",
+        # # Russian variations
+        # "вперед", "прямо", "вперёд", "двигайся вперёд", "прямо вперёд",
+        # # Korean variations
+        # "앞으로", "전진", "직진", "앞으로 가", "직진해",
+        # # Arabic variations
+        # "إلى الأمام", "تقدم", "مباشرة", "للأمام", "تحرك للأمام",
+        # # Turkish variations
+        # "ileri", "düz", "ilerle", "düz git", "ileri git",
+        # # Polish variations
+        # "naprzód", "do przodu", "prosto", "jedź prosto", "idź naprzód",
+        # # Dutch variations
+        # "vooruit", "rechtdoor", "ga vooruit", "recht vooruit", "voorwaarts",
+        # # Portuguese variations
+        # "frente", "para frente", "em frente", "avançar", "siga em frente",
+        # # Swedish variations
+        # "framåt", "rakt fram", "gå framåt", "fortsätt framåt", "rakt",
+        # # Finnish variations
+        # "eteenpäin", "suoraan", "mene eteenpäin", "etene", "suoraan eteenpäin",
+        # # Simple phonetic variations that may come from ASR errors
         "go for word", "ford", "foreward", "forword", "farward"
     ],
     
@@ -1649,44 +1697,65 @@ WHEELCHAIR_COMMANDS = {
     "backward": [
         # English variations
         "backward", "go backward", "move backward", "back", "go back", "move back", 
-        "reverse", "go reverse", "move in reverse", "retreat", "step back", 
+        "reverse", "go reverse", "move in reverse", "retreat", "step back", "move backwards",
+        "head back", "back it up", "drive backward", "reverse back", "go back please", "roll back",
         # Hindi variations
-        "पीछे", "पीछे जाओ", "पीछे चलो", "वापस", "वापस जाओ", "पीछे की ओर",
-        "peeche", "peeche jao", "peeche chalo", "vaapas", "vaapas jao", "peeche ki or",
+        "पीछे", "पीछे जाओ", "पीछे चलो", "पीछे हटो", "पीछे हट जाओ", "वापस", "वापस जाओ", "पीछे की ओर",
+        "peeche", "peeche jao", "peeche chalo", "peeche hato", "peeche hat jao", "vaapas", "vaapas jao", "peeche ki or",
+        "peeche aao", "peechay jao", "piche jao", "piche hao", "peeche wapas aao",
         # Marathi variations
-        "मागे", "मागे जा", "मागे चल", "मागे चला", "मागे फिरा", 
-        "mage", "mage ja", "mage chal", "mage chala", "mage fira",
-        # Spanish variations
-        "atrás", "hacia atrás", "ve atrás", "retrocede", "reversa",
-        # French variations
-        "reculer", "en arrière", "marche arrière", "reculez", "arrière", "recule",
-        # German variations
-        "rückwärts", "zurück", "nach hinten", "geh zurück", "zurückgehen", "rücken",
-        # Italian variations
-        "indietro", "vai indietro", "marcia indietro", "retrocedere", "tornare indietro", "retromarcia",
-        # Chinese variations (Simplified)
-        "后退", "向后", "倒退", "往后", "后方", "倒车",
-        # Japanese variations
-        "後退", "バック", "下がる", "戻る", "後ろへ", "バックする",
-        # Russian variations
-        "назад", "задний ход", "двигайся назад", "отступить", "реверс", "возвращайся",
-        # Korean variations
-        "뒤로", "후진", "뒤로 가", "뒤로 가세요", "백", "후퇴",
-        # Arabic variations
-        "للخلف", "إلى الخلف", "تراجع", "عد", "ارجع", "رجوع",
-        # Turkish variations
-        "geri", "geriye", "geri git", "tersine", "geri dön", "geri çek",
-        # Polish variations
-        "wstecz", "do tyłu", "cofnij", "cofaj", "zawróć", "odwrót",
-        # Dutch variations
-        "achteruit", "terug", "ga terug", "achterwaarts", "keer terug", "terugrijden",
-        # Portuguese variations
-        "para trás", "retroceder", "voltar", "recuar", "ré", "marcha atrás",
-        # Swedish variations
-        "bakåt", "backa", "gå bakåt", "tillbaka", "återgå", "reträtt",
-        # Finnish variations
-        "taaksepäin", "peruuta", "takaisin", "käänny takaisin", "taakse", "peruutus",
-        # Phonetic variations
+        "मागे", "मागे जा", "मागे चला", "मागे चल", "मागे फिरा", "मागे वळा", "मागे सरळ",
+        "mage", "mage ja", "mage jaa", "mage chal", "mage chala", "mage fira", "mage vala", "maghe ja",
+        "maghe jaa", "maghe fira",
+        # Punjabi variations
+        "ਪਿੱਛੇ ਜਾਓ", "ਪਿੱਛੇ ਹਟੋ", "ਵਾਪਸ ਜਾਓ", "ਉਲਟ ਜਾਓ", "ਪਿੱਛੇ ਚੱਲੋ",
+        "piche jao", "pichhe jao", "wapas jao", "ulta jao", "piche chalo",
+        # Kannada variations
+        "ಹಿಂದಕ್ಕೆ ಹೋಗಿ", "ಹಿಂದೆ ಹೋಗಿ", "ಹಿಂಬದಿ ಹೋಗಿ", "ರಿವರ್ಸ್ ಹೋಗಿ", "ಹಿಂದಕ್ಕೆ ಬನ್ನಿ",
+        "hindakke hogi", "hinde hogi", "hinbadi hogi", "reverse hogi", "hindakke banni",
+        # Bengali variations
+        "পিছনে যাও", "পেছনে যাও", "ফিরে যাও", "উল্টো যাও", "পেছনে চল",
+        "pichone jao", "pechone jao", "fire jao", "ulto jao", "pechone chol",
+        # Gujarati variations
+        "પાછળ જાઓ", "પાછા જાઓ", "પાછળ વળો", "રિવર્સ જાઓ", "પાછળ ચાલો",
+        "pachal jao", "pacha jao", "pachal valo", "reverse jao", "pachal chalo",
+        # Tamil variations
+        "பின்னே போ", "பின்செல்", "பின்பக்கம் போ", "பின்னால் செல்", "பின்னுக்கு போ",
+        "pinne po", "pinsel", "pinpakkam po", "pinnaal sel", "pinnukku po",
+        # Urdu variations
+        "پیچھے جاؤ", "پیچھے ہٹو", "واپس جاؤ", "الٹا چلو", "پیچھے چلو",
+        "peeche jao", "peeche hato", "wapas jao", "ulta chalo", "peeche chalo",
+        # # Spanish variations
+        # "atrás", "hacia atrás", "ve atrás", "retrocede", "reversa",
+        # # French variations
+        # "reculer", "en arrière", "marche arrière", "reculez", "arrière", "recule",
+        # # German variations
+        # "rückwärts", "zurück", "nach hinten", "geh zurück", "zurückgehen", "rücken",
+        # # Italian variations
+        # "indietro", "vai indietro", "marcia indietro", "retrocedere", "tornare indietro", "retromarcia",
+        # # Chinese variations (Simplified)
+        # "后退", "向后", "倒退", "往后", "后方", "倒车",
+        # # Japanese variations
+        # "後退", "バック", "下がる", "戻る", "後ろへ", "バックする",
+        # # Russian variations
+        # "назад", "задний ход", "двигайся назад", "отступить", "реверс", "возвращайся",
+        # # Korean variations
+        # "뒤로", "후진", "뒤로 가", "뒤로 가세요", "백", "후퇴",
+        # # Arabic variations
+        # "للخلف", "إلى الخلف", "تراجع", "عد", "ارجع", "رجوع",
+        # # Turkish variations
+        # "geri", "geriye", "geri git", "tersine", "geri dön", "geri çek",
+        # # Polish variations
+        # "wstecz", "do tyłu", "cofnij", "cofaj", "zawróć", "odwrót",
+        # # Dutch variations
+        # "achteruit", "terug", "ga terug", "achterwaarts", "keer terug", "terugrijden",
+        # # Portuguese variations
+        # "para trás", "retroceder", "voltar", "recuar", "ré", "marcha atrás",
+        # # Swedish variations
+        # "bakåt", "backa", "gå bakåt", "tillbaka", "återgå", "reträtt",
+        # # Finnish variations
+        # "taaksepäin", "peruuta", "takaisin", "käänny takaisin", "taakse", "peruutus",
+        # # Phonetic variations
         "backword", "bakward", "back word", "backwad", "bak"
     ],
     
@@ -1695,48 +1764,70 @@ WHEELCHAIR_COMMANDS = {
         # English variations
         "left", "go left", "move left", "turn left", "to the left", "leftward",
         "rotate left", "spin left", "circle left", "turn left side", "veer left",
+        "move to the left", "shift left", "slide left", "step left", "drift left",
         # Hindi variations (with distinctive forms)
-        "बाएं", "बाएं मुड़ो", "बाएं जाओ", "बाएं चलो", "बायीं ओर", "बायीं तरफ", "बायें घूमो",
+        "बाएं", "बाएं मुड़ो", "बाएं जाओ", "बाएं चलो", "बाईं ओर जाओ", "बाईं तरफ जाओ", "बायीं ओर", "बायीं तरफ", "बायें घूमो",
         "बाई", "बाई तरफ", "बाई ओर", "बाई मुड़ो", "बाई मुडो", "बाई मुरें", "बाई मूड़ो", 
+        "बाईं ओर मुड़ो", "बाईं तरफ चलो", "बाईं तरफ मुड़ो",
         "bayen", "baaye", "baye", "baye mudo", "baaye mudo", "baaye jao", "baaye chalo", "bayi or", "left mudo",
         "baee", "baaee", "bai taraf", "bai mudo", "bai muren", "bayein taraf", "bayen mudo",
+        "bai or", "bai taraf jao", "baaye taraf jao", "baayn", "baayin",
         # Common spelling/pronunciation variations
         "bayein", "bayee", "bai", "baai", "baen", "baayen", "baain", 
         # Marathi variations
-        "डावीकडे", "डावीकडे वळा", "डावीकडे जा", "डावीकडे चला",
-        "davikade", "davikade vala", "davikade ja", "davikade chala",
-        # Spanish variations
-        "izquierda", "a la izquierda", "gira a la izquierda", "ve a la izquierda",
-        # French variations
-        "gauche", "à gauche", "tourner à gauche", "allez à gauche", "vers la gauche",
-        # German variations
-        "links", "nach links", "biege links ab", "links abbiegen", "zur linken", "linke seite",
-        # Italian variations
-        "sinistra", "a sinistra", "gira a sinistra", "vai a sinistra", "verso sinistra",
-        # Chinese variations (Simplified)
-        "左", "向左", "左转", "往左", "左边", "向左转",
-        # Japanese variations
-        "左", "左へ", "左折", "左に曲がる", "レフト", "左方向",
-        # Russian variations
-        "влево", "налево", "поверни налево", "левая сторона", "слева", "в левую сторону",
-        # Korean variations
-        "왼쪽", "왼쪽으로", "왼쪽으로 돌아", "좌회전", "왼쪽으로 가", "좌측",
-        # Arabic variations
-        "يسار", "إلى اليسار", "انعطف يسارا", "اذهب يسارا", "الجانب الأيسر", "يساراً",
-        # Turkish variations
-        "sol", "sola", "sola dön", "sola git", "sol taraf", "sola doğru",
-        # Polish variations
-        "lewo", "w lewo", "skręć w lewo", "idź w lewo", "na lewo", "po lewej",
-        # Dutch variations
-        "links", "naar links", "ga naar links", "linksom", "links afslaan", "linker kant",
-        # Portuguese variations
-        "esquerda", "à esquerda", "vire à esquerda", "vá para a esquerda", "lado esquerdo", "virar à esquerda",
-        # Swedish variations
-        "vänster", "till vänster", "sväng vänster", "gå åt vänster", "vänstra sidan", "vänd vänster",
-        # Finnish variations
-        "vasen", "vasemmalle", "käänny vasemmalle", "mene vasemmalle", "vasen puoli", "vasempaan",
-        # Czech variations
-        "vlevo", "doleva", "odbočte doleva", "jděte doleva", "na levé straně", "levá strana",
+        "डावीकडे", "डावीकडे वळा", "डावीकडे जा", "डावीकडे चला", "डावीकडे वळून जा", "डावीकडे सरका",
+        "davikade", "davikade vala", "davikade ja", "davikade chala", "davikade valun ja", "davikade saraka",
+        "davi bazula ja", "davya kade ja", "davya kade vala",
+        # Punjabi variations
+        "ਖੱਬੇ ਜਾਓ", "ਖੱਬੇ ਮੁੜੋ", "ਖੱਬੇ ਵੱਲ", "ਖੱਬੇ ਪਾਸੇ ਜਾਓ", "ਖੱਬੇ ਚੱਲੋ",
+        "khabe jao", "khabbey muro", "khabbey wal", "khabbey pase jao", "khabbey chalo",
+        # Kannada variations
+        "ಎಡಕ್ಕೆ ಹೋಗಿ", "ಎಡಕ್ಕೆ ತಿರುಗಿ", "ಎಡ ಬದಿಗೆ ಹೋಗಿ", "ಎಡಕ್ಕೆ ವಾಳಿ", "ಎಡಕ್ಕೆ ಚಲಿಸಿ",
+        "edakke hogi", "edakke tirugi", "eda badige hogi", "edakke vaali", "edakke chalisi",
+        # Bengali variations
+        "বামে যাও", "বামে ঘুরো", "বাম দিকে যাও", "বামের দিকে চল", "বাম পাশের দিকে যাও",
+        "bame jao", "bame ghuro", "bam dike jao", "bam dike chol", "bam pashe jao",
+        # Gujarati variations
+        "ડાબે જાઓ", "ડાબે વાળો", "ડાબી તરફ જાઓ", "ડાબી બાજુ જાઓ", "ડાબે ચાલો",
+        "dabe jao", "dabe valo", "dabi taraf jao", "dabi baju jao", "dabe chalo",
+        # Tamil variations
+        "இடது பக்கம் போ", "இடப்பக்கம் திருப்பு", "இடமாக செல்", "இடது பக்கம் திரும்பு", "இடதுபுறம் போ",
+        "idathu pakkam po", "idappakkam thiruppu", "idama sel", "idathu pakkam tirumbu", "idathupuram po",
+        # Urdu variations
+        "بائیں مڑو", "بائیں جاؤ", "بائیں طرف جاؤ", "بائیں طرف", "بائیں جانب",
+        "baen muro", "baen jao", "baen taraf jao", "bayen taraf", "bain janib",
+        # # Spanish variations
+        # "izquierda", "a la izquierda", "gira a la izquierda", "ve a la izquierda",
+        # # French variations
+        # "gauche", "à gauche", "tourner à gauche", "allez à gauche", "vers la gauche",
+        # # German variations
+        # "links", "nach links", "biege links ab", "links abbiegen", "zur linken", "linke seite",
+        # # Italian variations
+        # "sinistra", "a sinistra", "gira a sinistra", "vai a sinistra", "verso sinistra",
+        # # Chinese variations (Simplified)
+        # "左", "向左", "左转", "往左", "左边", "向左转",
+        # # Japanese variations
+        # "左", "左へ", "左折", "左に曲がる", "レフト", "左方向",
+        # # Russian variations
+        # "влево", "налево", "поверни налево", "левая сторона", "слева", "в левую сторону",
+        # # Korean variations
+        # "왼쪽", "왼쪽으로", "왼쪽으로 돌아", "좌회전", "왼쪽으로 가", "좌측",
+        # # Arabic variations
+        # "يسار", "إلى اليسار", "انعطف يسارا", "اذهب يسارا", "الجانب الأيسر", "يساراً",
+        # # Turkish variations
+        # "sol", "sola", "sola dön", "sola git", "sol taraf", "sola doğru",
+        # # Polish variations
+        # "lewo", "w lewo", "skręć w lewo", "idź w lewo", "na lewo", "po lewej",
+        # # Dutch variations
+        # "links", "naar links", "ga naar links", "linksom", "links afslaan", "linker kant",
+        # # Portuguese variations
+        # "esquerda", "à esquerda", "vire à esquerda", "vá para a esquerda", "lado esquerdo", "virar à esquerda",
+        # # Swedish variations
+        # "vänster", "till vänster", "sväng vänster", "gå åt vänster", "vänstra sidan", "vänd vänster",
+        # # Finnish variations
+        # "vasen", "vasemmalle", "käänny vasemmalle", "mene vasemmalle", "vasen puoli", "vasempaan",
+        # # Czech variations
+        # "vlevo", "doleva", "odbočte doleva", "jděte doleva", "na levé straně", "levá strana",
         # Phonetic variations and common ASR mistakes
         "lift", "leafed", "laft", "lft", "lef", "leven", "lefty", "läft"
     ],
@@ -1746,49 +1837,71 @@ WHEELCHAIR_COMMANDS = {
         # English variations
         "right", "go right", "move right", "turn right", "to the right", "rightward",
         "rotate right", "spin right", "circle right", "turn right side", "veer right",
+        "move to the right", "shift right", "slide right", "step right", "drift right",
         # Hindi variations (with distinctive forms)
-        "दाएं", "दाएं मुड़ो", "दाएं जाओ", "दाएं चलो", "दायीं ओर", "दायीं तरफ", "दायें घूमो",
+        "दाएं", "दाएं मुड़ो", "दाएं जाओ", "दाएं चलो", "दाईं ओर", "दाईं ओर जाओ", "दाईं तरफ", "दाईं तरफ जाओ", "दायें घूमो",
         "दाई", "दाई तरफ", "दाई ओर", "दाई मुड़ो", "दाई मुडो", "दाई मुरें", "दाई मूड़ो",
+        "दाईं ओर मुड़ो", "दाईं तरफ चलो", "दाईं तरफ मुड़ो",
         "dayen", "daaye", "daye", "daye mudo", "daaye mudo", "daaye jao", "daaye chalo", "dayi or", "right mudo",
         "daee", "daaee", "dai taraf", "dai mudo", "dai muren", "dahine", "dahina", "dahini taraf", 
+        "dahine jao", "dahine mud", "daye taraf jao", "daayen taraf",
         # Common spelling/pronunciation variations
         "dayein", "dayee", "dai", "daai", "daen", "daayen", "daain",
         # Marathi variations
-        "उजवीकडे", "उजवीकडे वळा", "उजवीकडे जा", "उजवीकडे चला",
-        "ujavikade", "ujavikade vala", "ujavikade ja", "ujavikade chala",
-        # Spanish variations
-        "derecha", "a la derecha", "gira a la derecha", "ve a la derecha",
-        # French variations
-        "droite", "à droite", "tourner à droite", "allez à droite", "vers la droite",
-        # German variations
-        "rechts", "nach rechts", "biege rechts ab", "rechts abbiegen", "zur rechten", "rechte seite",
-        # Italian variations
-        "destra", "a destra", "gira a destra", "vai a destra", "verso destra",
-        # Chinese variations (Simplified)
-        "右", "向右", "右转", "往右", "右边", "向右转",
-        # Japanese variations
-        "右", "右へ", "右折", "右に曲がる", "ライト", "右方向",
-        # Russian variations
-        "вправо", "направо", "поверни направо", "правая сторона", "справа", "в правую сторону",
-        # Korean variations
-        "오른쪽", "오른쪽으로", "오른쪽으로 돌아", "우회전", "오른쪽으로 가", "우측",
-        # Arabic variations
-        "يمين", "إلى اليمين", "انعطف يمينا", "اذهب يمينا", "الجانب الأيمن", "يميناً",
-        # Turkish variations
-        "sağ", "sağa", "sağa dön", "sağa git", "sağ taraf", "sağa doğru",
-        # Polish variations
-        "prawo", "w prawo", "skręć w prawo", "idź w prawo", "na prawo", "po prawej",
-        # Dutch variations
-        "rechts", "naar rechts", "ga naar rechts", "rechtsom", "rechts afslaan", "rechter kant",
-        # Portuguese variations
-        "direita", "à direita", "vire à direita", "vá para a direita", "lado direito", "virar à direita",
-        # Swedish variations
-        "höger", "till höger", "sväng höger", "gå åt höger", "högra sidan", "vänd höger",
-        # Finnish variations
-        "oikea", "oikealle", "käänny oikealle", "mene oikealle", "oikea puoli", "oikeaan",
-        # Czech variations
-        "vpravo", "doprava", "odbočte doprava", "jděte doprava", "na pravé straně", "pravá strana",
-        # Phonetic variations and common ASR mistakes
+        "उजवीकडे", "उजवीकडे वळा", "उजवीकडे जा", "उजवीकडे चला", "उजवीकडे वळून जा", "उजवीकडे सरका",
+        "ujavikade", "ujavikade vala", "ujavikade ja", "ujavikade chala", "ujavikade valun ja", "ujavikade saraka",
+        "ujya kade ja", "ujya kade vala", "ujvi bazula ja",
+        # Punjabi variations
+        "ਸੱਜੇ ਜਾਓ", "ਸੱਜੇ ਮੁੜੋ", "ਸੱਜੇ ਵੱਲ", "ਸੱਜੇ ਪਾਸੇ ਜਾਓ", "ਸੱਜੇ ਚੱਲੋ",
+        "sajje jao", "sajje muro", "sajje wal", "sajje pase jao", "sajje chalo",
+        # Kannada variations
+        "ಬಲಕ್ಕೆ ಹೋಗಿ", "ಬಲಕ್ಕೆ ತಿರುಗಿ", "ಬಲ ಬದಿಗೆ ಹೋಗಿ", "ಬಲಕ್ಕೆ ವಾಳಿ", "ಬಲಕ್ಕೆ ಚಲಿಸಿ",
+        "balakke hogi", "balakke tirugi", "bala badige hogi", "balakke vaali", "balakke chalisi",
+        # Bengali variations
+        "ডানে যাও", "ডানে ঘুরো", "ডান দিকে যাও", "ডান পাশের দিকে যাও", "ডানে চল",
+        "dane jao", "dane ghuro", "dan dike jao", "dan pashe jao", "dane chol",
+        # Gujarati variations
+        "જમણે જાઓ", "જમણે વાળો", "જમણી તરફ જાઓ", "જમણી બાજુ જાઓ", "જમણે ચાલો",
+        "jamne jao", "jamne valo", "jamni taraf jao", "jamni baju jao", "jamne chalo",
+        # Tamil variations
+        "வலது பக்கம் போ", "வலப்பக்கம் திருப்பு", "வலமாக செல்", "வலது பக்கம் திரும்பு", "வலப்புறம் போ",
+        "valathu pakkam po", "valappakkam thiruppu", "valama sel", "valathu pakkam tirumbu", "valappuram po",
+        # Urdu variations
+        "دائیں مڑو", "دائیں جاؤ", "دائیں طرف جاؤ", "دائیں طرف", "دائیں جانب",
+        "dain muro", "dain jao", "dain taraf jao", "dayen taraf", "dain janib",
+        # # Spanish variations
+        # "derecha", "a la derecha", "gira a la derecha", "ve a la derecha",
+        # # French variations
+        # "droite", "à droite", "tourner à droite", "allez à droite", "vers la droite",
+        # # German variations
+        # "rechts", "nach rechts", "biege rechts ab", "rechts abbiegen", "zur rechten", "rechte seite",
+        # # Italian variations
+        # "destra", "a destra", "gira a destra", "vai a destra", "verso destra",
+        # # Chinese variations (Simplified)
+        # "右", "向右", "右转", "往右", "右边", "向右转",
+        # # Japanese variations
+        # "右", "右へ", "右折", "右に曲がる", "ライト", "右方向",
+        # # Russian variations
+        # "вправо", "направо", "поверни направо", "правая сторона", "справа", "в правую сторону",
+        # # Korean variations
+        # "오른쪽", "오른쪽으로", "오른쪽으로 돌아", "우회전", "오른쪽으로 가", "우측",
+        # # Arabic variations
+        # "يمين", "إلى اليمين", "انعطف يمينا", "اذهب يمينا", "الجانب الأيمن", "يميناً",
+        # # Turkish variations
+        # "sağ", "sağa", "sağa dön", "sağa git", "sağ taraf", "sağa doğru",
+        # # Polish variations
+        # "prawo", "w prawo", "skręć w prawo", "idź w prawo", "na prawo", "po prawej",
+        # # Dutch variations
+        # "rechts", "naar rechts", "ga naar rechts", "rechtsom", "rechts afslaan", "rechter kant",
+        # # Portuguese variations
+        # "direita", "à direita", "vire à direita", "vá para a direita", "lado direito", "virar à direita",
+        # # Swedish variations
+        # "höger", "till höger", "sväng höger", "gå åt höger", "högra sidan", "vänd höger",
+        # # Finnish variations
+        # "oikea", "oikealle", "käänny oikealle", "mene oikealle", "oikea puoli", "oikeaan",
+        # # Czech variations
+        # "vpravo", "doprava", "odbočte doprava", "jděte doprava", "na pravé straně", "pravá strana",
+        # # Phonetic variations and common ASR mistakes
         "rite", "wright", "ryt", "rit", "rght", "raight", "righte", "rigte"
     ],
     
@@ -1797,43 +1910,62 @@ WHEELCHAIR_COMMANDS = {
         # English variations
         "rotate left", "spin left", "turn around left", "rotate counter-clockwise", "turn counter clockwise",
         "spin counter-clockwise", "rotate anticlockwise", "circle left", "turn full left",
+        "rotate to the left", "spin to the left", "make a left circle", "turn left in place",
         # Hindi variations
-        "बाएं घूमो", "बाएं घूमना", "पूरा बाएं मुड़ो", "उल्टी दिशा में घूमो",
+        "बाएं घूमो", "बाएं घूमना", "पूरा बाएं मुड़ो", "उल्टी दिशा में घूमो", "बाईं ओर घूमो", "बाईं तरफ घूमो",
         "baaye ghumo", "baaye ghoom", "baaye ghumao", "baaye rotate karo", "counter clockwise ghoom",
-        "ulti disha me ghumo", "pura baaye mudo", "left me ghoom jao",
+        "ulti disha me ghumo", "pura baaye mudo", "left me ghoom jao", "bai taraf ghoom", "bai or ghoom",
         # Marathi variations
-        "डावीकडे फिरा", "डावीकडे गोल फिरा", "डावीकडे वळून फिरा",
-        "davikade fira", "davikade gol fira", "davikade valun fira",
-        # Spanish variations
-        "girar a la izquierda", "rotar a la izquierda", "dar vuelta a la izquierda", "girar completamente a la izquierda",
-        # French variations
-        "tourner à gauche complètement", "faire un tour à gauche", "rotation à gauche", "pivoter à gauche",
-        "tourner dans le sens antihoraire", "faire un cercle à gauche",
-        # German variations
-        "nach links drehen", "links herum drehen", "links rotieren", "gegen den Uhrzeigersinn drehen",
-        "links rundherum", "vollständig nach links drehen",
-        # Italian variations
-        "ruotare a sinistra", "girare completamente a sinistra", "fare un cerchio a sinistra", "rotazione sinistra",
-        "girare in senso antiorario", "rotazione antioraria",
-        # Chinese variations (Simplified)
-        "向左旋转", "左转圈", "逆时针旋转", "完全向左转", "左侧旋转",
-        # Japanese variations
-        "左回り", "左に回転", "反時計回り", "左に旋回する", "左回転",
-        # Russian variations
-        "повернуть влево полностью", "вращаться влево", "поворот против часовой стрелки",
-        "крутиться влево", "повернуться влево кругом",
-        # Korean variations
-        "왼쪽으로 회전", "왼쪽으로 돌기", "반시계 방향으로", "왼쪽으로 빙글빙글", "왼쪽으로 완전히 돌기",
-        # Arabic variations
-        "الدوران إلى اليسار", "دوران كامل لليسار", "لف إلى اليسار", "دوران عكس عقارب الساعة",
-        # Turkish variations
-        "sola dön", "sola döndür", "saat yönünün tersine", "sol tarafa dön", "tamamen sola dön",
-        # Polish variations
-        "obróć w lewo", "skręć całkowicie w lewo", "obróć się przeciwnie do ruchu wskazówek zegara", 
-        # Dutch variations
-        "draai naar links", "roteer linksom", "volledig naar links draaien", "tegen de klok in draaien",
-        # Portuguese variations
-        "girar à esquerda", "rodar para a esquerda", "rotação anti-horária", "dar volta completa à esquerda",
+        "डावीकडे फिरा", "डावीकडे गोल फिरा", "डावीकडे वळून फिरा", "डावीकडे पूर्ण फिरा", "डावीकडे गोलक फिरा",
+        "davikade fira", "davikade gol fira", "davikade valun fira", "davikade purn fira", "davikade golak fira",
+        # Punjabi variations
+        "ਖੱਬੇ ਘੁੰਮੋ", "ਖੱਬੇ ਰੋਟੇਟ ਕਰੋ", "ਖੱਬੇ ਵੱਲ ਘੁੰਮੋ", "ਖੱਬੀ ਸਾਈਡ ਘੁੰਮੋ",
+        "khabbey ghumo", "khabbey rotate karo", "khabbey wal ghumo", "khabbey side ghumo",
+        # Kannada variations
+        "ಎಡಕ್ಕೆ ಸುತ್ತಿ", "ಎಡಕ್ಕೆ ಸಂಪೂರ್ಣ ಸುತ್ತಿ", "ಎಡಕ್ಕೆ ತಿರುಗುತ್ತಾ", "ಎಡಕ್ಕೆ ವೃತ್ತ ಮಾಡಿ",
+        "edakke suthi", "edakke sampoorna suthi", "edakke tirugutha", "edakke vrutta madi",
+        # Bengali variations
+        "বামে ঘুরে ঘুরো", "বামে পুরো ঘুরো", "বাম দিকে ঘুরাও", "বামে ঘুরো",
+        "bame ghure ghuro", "bame puro ghuro", "bam dike ghurao", "bame ghuro",
+        # Gujarati variations
+        "ડાબે ફરાવો", "ડાબી તરફ ઘુમાવો", "ડાબે પરિભ્રમણ કરો", "ડાબે સંપૂર્ણ ફરાવો",
+        "dabe faravo", "dabi taraf ghumavo", "dabe paribhraman karo", "dabe sampurn faravo",
+        # Tamil variations
+        "இடப்பக்கம் சுற்று", "இடப்பக்கம் முழு சுற்று", "இடது பக்கம் சுற்றிவிடு", "இடப்புறம் சுற்று",
+        "idappakkam sutru", "idappakkam muzhu sutru", "idathu pakkam sutrividu", "idappuram sutru",
+        # Urdu variations
+        "بائیں گھومو", "بائیں طرف گھومو", "بائیں جانب گھومو", "بائیں گردش کرو",
+        "baen ghoomo", "baen taraf ghoomo", "baen janib ghoomo", "bain gardish karo",
+        # # Spanish variations
+        # "girar a la izquierda", "rotar a la izquierda", "dar vuelta a la izquierda", "girar completamente a la izquierda",
+        # # French variations
+        # "tourner à gauche complètement", "faire un tour à gauche", "rotation à gauche", "pivoter à gauche",
+        # "tourner dans le sens antihoraire", "faire un cercle à gauche",
+        # # German variations
+        # "nach links drehen", "links herum drehen", "links rotieren", "gegen den Uhrzeigersinn drehen",
+        # "links rundherum", "vollständig nach links drehen",
+        # # Italian variations
+        # "ruotare a sinistra", "girare completamente a sinistra", "fare un cerchio a sinistra", "rotazione sinistra",
+        # "girare in senso antiorario", "rotazione antioraria",
+        # # Chinese variations (Simplified)
+        # "向左旋转", "左转圈", "逆时针旋转", "完全向左转", "左侧旋转",
+        # # Japanese variations
+        # "左回り", "左に回転", "反時計回り", "左に旋回する", "左回転",
+        # # Russian variations
+        # "повернуть влево полностью", "вращаться влево", "поворот против часовой стрелки",
+        # "крутиться влево", "повернуться влево кругом",
+        # # Korean variations
+        # "왼쪽으로 회전", "왼쪽으로 돌기", "반시계 방향으로", "왼쪽으로 빙글빙글", "왼쪽으로 완전히 돌기",
+        # # Arabic variations
+        # "الدوران إلى اليسار", "دوران كامل لليسار", "لف إلى اليسار", "دوران عكس عقارب الساعة",
+        # # Turkish variations
+        # "sola dön", "sola döndür", "saat yönünün tersine", "sol tarafa dön", "tamamen sola dön",
+        # # Polish variations
+        # "obróć w lewo", "skręć całkowicie w lewo", "obróć się przeciwnie do ruchu wskazówek zegara", 
+        # # Dutch variations
+        # "draai naar links", "roteer linksom", "volledig naar links draaien", "tegen de klok in draaien",
+        # # Portuguese variations
+        # "girar à esquerda", "rodar para a esquerda", "rotação anti-horária", "dar volta completa à esquerda",
         # Phonetic variations
         "rotateleft", "rotate lft", "spin lft", "turn lft"
     ],
@@ -1843,31 +1975,50 @@ WHEELCHAIR_COMMANDS = {
         # English variations
         "rotate right", "spin right", "turn around right", "rotate clockwise", "turn clockwise",
         "spin clockwise", "circle right", "turn full right", "make a right circle",
+        "rotate to the right", "spin to the right", "make a right spin", "turn right in place",
         # Hindi variations
-        "दाएं घूमो", "दाएं घूमना", "पूरा दाएं मुड़ो", "सीधी दिशा में घूमो",
+        "दाएं घूमो", "दाएं घूमना", "पूरा दाएं मुड़ो", "सीधी दिशा में घूमो", "दाईं ओर घूमो", "दाईं तरफ घूमो",
         "daaye ghumo", "daaye ghoom", "daaye ghumao", "daaye rotate karo", "clockwise ghoom",
-        "seedhi disha me ghumo", "pura daaye mudo", "right me ghoom jao",
+        "seedhi disha me ghumo", "pura daaye mudo", "right me ghoom jao", "dai taraf ghoom", "dai or ghoom",
         # Marathi variations
-        "उजवीकडे फिरा", "उजवीकडे गोल फिरा", "उजवीकडे वळून फिरा",
-        "ujavikade fira", "ujavikade gol fira", "ujavikade valun fira",
-        # Spanish variations
-        "girar a la derecha", "rotar a la derecha", "dar vuelta a la derecha",
-        # French variations
-        "tourner à droite complètement", "faire un tour à droite", "rotation à droite", "pivoter à droite",
-        "tourner dans le sens horaire", "faire un cercle à droite",
-        # German variations
-        "nach rechts drehen", "rechts herum drehen", "rechts rotieren", "im Uhrzeigersinn drehen",
-        "rechts rundherum", "vollständig nach rechts drehen",
-        # Italian variations
-        "ruotare a destra", "girare completamente a destra", "fare un cerchio a destra", "rotazione destra",
-        "girare in senso orario", "rotazione oraria",
-        # Chinese variations (Simplified)
-        "向右旋转", "右转圈", "顺时针旋转", "完全向右转", "右侧旋转",
-        # Japanese variations
-        "右回り", "右に回転", "時計回り", "右に旋回する", "右回転",
-        # Russian variations
-        "повернуть вправо полностью", "вращаться вправо", "поворот по часовой стрелке",
-        "крутиться вправо", "повернуться вправо кругом",
+        "उजवीकडे फिरा", "उजवीकडे गोल फिरा", "उजवीकडे वळून फिरा", "उजवीकडे पूर्ण फिरा", "उजवीकडे गोलक फिरा",
+        "ujavikade fira", "ujavikade gol fira", "ujavikade valun fira", "ujavikade purn fira", "ujavikade golak fira",
+        # Punjabi variations
+        "ਸੱਜੇ ਘੁੰਮੋ", "ਸੱਜੇ ਰੋਟੇਟ ਕਰੋ", "ਸੱਜੇ ਵੱਲ ਘੁੰਮੋ", "ਸੱਜੀ ਸਾਈਡ ਘੁੰਮੋ",
+        "sajje ghumo", "sajje rotate karo", "sajje wal ghumo", "sajji side ghumo",
+        # Kannada variations
+        "ಬಲಕ್ಕೆ ಸುತ್ತಿ", "ಬಲಕ್ಕೆ ಸಂಪೂರ್ಣ ಸುತ್ತಿ", "ಬಲಕ್ಕೆ ತಿರುಗುತ್ತಾ", "ಬಲಕ್ಕೆ ವೃತ್ತ ಮಾಡಿ",
+        "balakke suthi", "balakke sampoorna suthi", "balakke tirugutha", "balakke vrutta madi",
+        # Bengali variations
+        "ডানে ঘুরে ঘুরো", "ডানে পুরো ঘুরো", "ডান দিকে ঘুরাও", "ডানে ঘুরো",
+        "dane ghure ghuro", "dane puro ghuro", "dan dike ghurao", "dane ghuro",
+        # Gujarati variations
+        "જમણે ફરાવો", "જમણી તરફ ઘુમાવો", "જમણે પરિભ્રમણ કરો", "જમણે સંપૂર્ણ ફરાવો",
+        "jamne faravo", "jamni taraf ghumavo", "jamne paribhraman karo", "jamne sampurn faravo",
+        # Tamil variations
+        "வலப்பக்கம் சுற்று", "வலப்பக்கம் முழு சுற்று", "வலது பக்கம் சுற்றிவிடு", "வலப்புறம் சுற்று",
+        "valappakkam sutru", "valappakkam muzhu sutru", "valathu pakkam sutrividu", "valappuram sutru",
+        # Urdu variations
+        "دائیں گھومو", "دائیں طرف گھومو", "دائیں جانب گھومو", "دائیں گردش کرو",
+        "dain ghoomo", "dain taraf ghoomo", "dain janib ghoomo", "dain gardish karo",
+        # # Spanish variations
+        # "girar a la derecha", "rotar a la derecha", "dar vuelta a la derecha",
+        # # French variations
+        # "tourner à droite complètement", "faire un tour à droite", "rotation à droite", "pivoter à droite",
+        # "tourner dans le sens horaire", "faire un cercle à droite",
+        # # German variations
+        # "nach rechts drehen", "rechts herum drehen", "rechts rotieren", "im Uhrzeigersinn drehen",
+        # "rechts rundherum", "vollständig nach rechts drehen",
+        # # Italian variations
+        # "ruotare a destra", "girare completamente a destra", "fare un cerchio a destra", "rotazione destra",
+        # "girare in senso orario", "rotazione oraria",
+        # # Chinese variations (Simplified)
+        # "向右旋转", "右转圈", "顺时针旋转", "完全向右转", "右侧旋转",
+        # # Japanese variations
+        # "右回り", "右に回転", "時計回り", "右に旋回する", "右回転",
+        # # Russian variations
+        # "повернуть вправо полностью", "вращаться вправо", "поворот по часовой стрелке",
+        # "крутиться вправо", "повернуться вправо кругом",
         # Phonetic variations
         "rotateright", "rotate rght", "spin rght", "turn rght"
     ],
@@ -1876,50 +2027,70 @@ WHEELCHAIR_COMMANDS = {
     "start": [
         # English variations
         "start", "begin", "power on", "activate", "wake up", "turn on", "initiate", "get going", 
-        "let's go", "engage", "launch", "commence", "start wheelchair",
+        "let's go", "engage", "launch", "commence", "start wheelchair", "power up", "fire it up",
+        "turn it on", "get started", "switch on", "kick off",
         # Hindi variations
-        "शुरू", "शुरू करो", "चालू करो", "चालू", "शुरुआत करो", "ऑन करो", "जागो",
+        "शुरू", "शुरू करो", "चालू करो", "चालू", "शुरुआत करो", "ऑन करो", "जागो", "मशीन चालू करो",
+        "शुरू हो जाओ", "चालू कर दो", "तुरंत चालू करो",
         "shuru", "shuru karo", "chalu karo", "chalu", "on karo", "activate karo", "jago",
-        "power on karo", "start karo", "start ho jao",
+        "power on karo", "start karo", "start ho jao", "machine chalu karo", "turant start karo",
         # Marathi variations
-        "सुरू", "सुरू करा", "चालू करा", "चालू", "ऑन करा",
-        "suru", "suru kara", "chalu kara", "chalu", "on kara",
-        # Spanish variations
-        "empezar", "iniciar", "encender", "activar", "comenzar", "arrancar", "poner en marcha",
-        # French variations
-        "commencer", "démarrer", "allumer", "activer", "mettre en marche", "démarrage",
-        "lancer", "s'y mettre", "allons-y", "en route",
-        # German variations
-        "starten", "beginnen", "einschalten", "aktivieren", "anmachen", "anfangen",
-        "los", "anschalten", "in gang setzen", "initiieren",
-        # Italian variations
-        "avviare", "iniziare", "accendere", "attivare", "cominciare", "partire",
-        "mettere in moto", "avvio", "via",
-        # Chinese variations (Simplified)
-        "开始", "启动", "打开", "激活", "开机", "运行", "启动轮椅",
-        # Japanese variations
-        "開始", "スタート", "起動", "オン", "作動", "始める", "電源オン",
-        # Russian variations
-        "старт", "начать", "включить", "активировать", "запустить", "начинать",
-        "включение", "приступить", "поехали",
-        # Korean variations
-        "시작", "켜다", "켜기", "활성화", "작동", "시작하다", "출발",
-        # Arabic variations
-        "ابدأ", "تشغيل", "بدء", "تنشيط", "تفعيل", "شغل", "انطلق",
-        # Turkish variations
-        "başla", "başlat", "çalıştır", "aktive et", "aç", "başlama", "hareket et",
-        # Polish variations
-        "start", "rozpocznij", "włącz", "aktywuj", "uruchom", "zacznij", "ruszaj",
-        # Dutch variations
-        "starten", "beginnen", "aanzetten", "activeren", "inschakelen", "opstarten", "aan",
-        # Portuguese variations
-        "iniciar", "começar", "ligar", "ativar", "arrancar", "dar partida", "acionar",
-        # Swedish variations
-        "starta", "börja", "sätta på", "aktivera", "sätt igång", "kör igång", "slå på",
-        # Finnish variations
-        "aloita", "käynnistä", "aktivoi", "käynnistys", "laita päälle", "aloittaa", "virta päälle",
-        # Czech variations
-        "start", "začít", "zapnout", "aktivovat", "spustit", "zahájit", "nastartovat",
+        "सुरू", "सुरू करा", "चालू करा", "चालू", "ऑन करा", "यंत्र सुरू करा", "ताबडतोब सुरू करा",
+        "suru", "suru kara", "chalu kara", "chalu", "on kara", "yantra suru kara", "tatkal suru kara",
+        # Punjabi variations
+        "ਸ਼ੁਰੂ ਕਰੋ", "ਸ਼ੁਰੂ ਕਰੋ ਜੀ", "ਚਾਲੂ ਕਰੋ", "ਆਨ ਕਰੋ", "ਸ਼ੁਰੂ ਕਰ ਦਿਓ",
+        "shuru karo", "shuru karo ji", "chalu karo", "on karo", "shuru kar dio",
+        # Kannada variations
+        "ಪ್ರಾರಂಭಿಸಿ", "ಆರಂಭಿಸಿ", "ಆನ್ ಮಾಡಿ", "ಚಾಲು ಮಾಡಿ", "ಚಾಲನೆ ಮಾಡಿ",
+        "prarambhisi", "arambhisi", "on madi", "chalu madi", "chalane madi",
+        # Bengali variations
+        "শুরু কর", "শুরু করুন", "চালু কর", "অন কর", "স্টার্ট কর",
+        "shuru kor", "shuru korun", "chalu kor", "on kor", "start kor",
+        # Gujarati variations
+        "શરૂ કરો", "શરૂઆત કરો", "ચાલુ કરો", "ઓન કરો", "પ્રારંભ કરો",
+        "sharu karo", "sharuvaat karo", "chalu karo", "on karo", "prarambh karo",
+        # Tamil variations
+        "தொடங்கு", "தொடங்குங்கள்", "ஆன் செய்", "இயக்கு", "வேலை தொடங்கு",
+        "thodangu", "thodangungal", "on sei", "iyakku", "velai thodangu",
+        # Urdu variations
+        "شروع کرو", "شروع کریں", "چالو کرو", "آن کرو", "فعال کرو",
+        "shuru karo", "shuru karein", "chalu karo", "on karo", "faal karo",
+        # # Spanish variations
+        # "empezar", "iniciar", "encender", "activar", "comenzar", "arrancar", "poner en marcha",
+        # # French variations
+        # "commencer", "démarrer", "allumer", "activer", "mettre en marche", "démarrage",
+        # "lancer", "s'y mettre", "allons-y", "en route",
+        # # German variations
+        # "starten", "beginnen", "einschalten", "aktivieren", "anmachen", "anfangen",
+        # "los", "anschalten", "in gang setzen", "initiieren",
+        # # Italian variations
+        # "avviare", "iniziare", "accendere", "attivare", "cominciare", "partire",
+        # "mettere in moto", "avvio", "via",
+        # # Chinese variations (Simplified)
+        # "开始", "启动", "打开", "激活", "开机", "运行", "启动轮椅",
+        # # Japanese variations
+        # "開始", "スタート", "起動", "オン", "作動", "始める", "電源オン",
+        # # Russian variations
+        # "старт", "начать", "включить", "активировать", "запустить", "начинать",
+        # "включение", "приступить", "поехали",
+        # # Korean variations
+        # "시작", "켜다", "켜기", "활성화", "작동", "시작하다", "출발",
+        # # Arabic variations
+        # "ابدأ", "تشغيل", "بدء", "تنشيط", "تفعيل", "شغل", "انطلق",
+        # # Turkish variations
+        # "başla", "başlat", "çalıştır", "aktive et", "aç", "başlama", "hareket et",
+        # # Polish variations
+        # "start", "rozpocznij", "włącz", "aktywuj", "uruchom", "zacznij", "ruszaj",
+        # # Dutch variations
+        # "starten", "beginnen", "aanzetten", "activeren", "inschakelen", "opstarten", "aan",
+        # # Portuguese variations
+        # "iniciar", "começar", "ligar", "ativar", "arrancar", "dar partida", "acionar",
+        # # Swedish variations
+        # "starta", "börja", "sätta på", "aktivera", "sätt igång", "kör igång", "slå på",
+        # # Finnish variations
+        # "aloita", "käynnistä", "aktivoi", "käynnistys", "laita päälle", "aloittaa", "virta päälle",
+        # # Czech variations
+        # "start", "začít", "zapnout", "aktivovat", "spustit", "zahájit", "nastartovat",
         # Phonetic variations
         "staart", "begin now", "stat", "strt"
     ],
@@ -1929,51 +2100,126 @@ WHEELCHAIR_COMMANDS = {
         # English variations
         "stop", "halt", "pause", "wait", "brake", "power off", "deactivate", "cease", 
         "hold", "freeze", "stand still", "stay", "stop moving", "no movement",
+        "shut down", "stop now", "cut it out", "kill switch", "stop right now", "halt immediately",
         # Hindi variations
-        "रुको", "थांबो", "रुक जाओ", "बंद करो", "बंद", "ऑफ करो", "ठहरो", "ठहर जाओ",
-        "ruko", "thambo", "ruk jao", "band karo", "band", "off karo", "thehro", "theher jao",
-        "stop karo", "rukna", "ab ruko", "bas", "bas karo", "deactivate karo",
+        "रुको", "थांबो", "रुक जाओ", "रुको अभी", "बंद करो", "बंद", "ऑफ करो", "ठहरो", "ठहर जाओ", "बस करो",
+        "ruko", "thambo", "ruk jao", "ruk abhi", "band karo", "band", "off karo", "thehro", "theher jao", "bas karo",
+        "stop karo", "rukna", "ab ruko", "deactivate karo", "turant ruko", "yahi ruk jao",
         # Marathi variations
-        "थांबा", "थांबवा", "बंद करा", "ऑफ करा",
-        "thamba", "thambava", "band kara", "off kara",
-        # Spanish variations
-        "parar", "detener", "alto", "para", "detente", "espera",
-        # French variations
-        "arrêter", "arrêt", "stop", "halte", "pause", "attendre", "freiner", "éteindre",
-        "désactiver", "cesser", "immobiliser", "tenir", "geler",
-        # German variations
-        "stopp", "halt", "anhalten", "pausieren", "warten", "bremsen", "ausschalten",
-        "deaktivieren", "stillstehen", "bleiben", "einfrieren", "halten",
-        # Italian variations
-        "fermare", "fermati", "stop", "pausa", "aspetta", "frenare", "spegnere",
-        "disattivare", "cessare", "bloccare", "immobile", "fermo", "arrestare",
-        # Chinese variations (Simplified)
-        "停止", "暂停", "等待", "刹车", "关闭", "停", "别动", "静止",
-        # Japanese variations
-        "停止", "ストップ", "止まれ", "止める", "待って", "ブレーキ", "オフ", "止まる", "中止",
-        # Russian variations
-        "стоп", "остановись", "пауза", "ждать", "тормоз", "выключить", "деактивировать",
-        "прекратить", "держать", "замереть", "стоять", "замри",
-        # Korean variations
-        "멈춰", "정지", "멈추세요", "멈춤", "서", "스톱", "중지", "기다려", "그만",
-        # Arabic variations
-        "قف", "توقف", "انتظر", "أوقف", "كفى", "تمهل", "تعطيل", "إيقاف",
-        # Turkish variations
-        "dur", "durun", "durdur", "duraklat", "bekle", "durma", "fren", "durdur",
-        # Polish variations
-        "zatrzymaj", "stop", "stój", "wstrzymaj", "pauza", "hamuj", "czekaj", "zatrzymanie",
-        # Dutch variations
-        "stop", "halt", "houden", "wacht", "stoppen", "pauze", "rem", "stilstaan",
-        # Portuguese variations
-        "pare", "parar", "alto", "espera", "deter", "trava", "freio", "aguarde",
-        # Swedish variations
-        "stopp", "stanna", "håll", "pausa", "vänta", "broms", "avsluta", "stå still",
-        # Finnish variations
-        "seis", "pysähdy", "lopeta", "tauko", "jarruta", "odota", "keskeytä", "pysäytä",
+        "थांबा", "थांबवा", "बंद करा", "ऑफ करा", "आता थांबा", "ताबडतोब थांबा",
+        "thamba", "thambava", "band kara", "off kara", "ata thamba", "tatkal thamba",
+        # Punjabi variations
+        "ਰੋਕੋ", "ਰੁੱਕੋ", "ਥੰਮ ਜਾਓ", "ਬੰਦ ਕਰੋ", "ਠਹਿਰੋ",
+        "roko", "rukko", "tham jao", "band karo", "thahiro",
+        # Kannada variations
+        "ನಿಲ್ಲಿಸಿ", "ನಿಲ್ಲಿ", "ಆಫ್ ಮಾಡಿ", "ಸ್ಥಗಿತಗೊಳಿಸಿ", "ತಡೆಹಿಡಿ",
+        "nillisi", "nilli", "off madi", "sthagitagolisi", "tadehidi",
+        # Bengali variations
+        "থামো", "থামুন", "থেমে যাও", "বন্ধ কর", "বন্ধ করুন",
+        "thamo", "thamun", "theme jao", "bondho kor", "bondho korun",
+        # Gujarati variations
+        "બંધ કરો", "રોકો", "ઑફ કરો", "થોભો", "સ્થગિત કરો",
+        "bandh karo", "roko", "off karo", "thobho", "sthagit karo",
+        # Tamil variations
+        "நிறுத்து", "நிறுத்துங்கள்", "நிறுத்திவிடு", "ஆஃப் செய்", "நிலை நிறுத்து",
+        "niruthu", "niruthungal", "niruthividu", "off sei", "nilai niruthu",
+        # Urdu variations
+        "رکو", "روکو", "رک جاؤ", "بند کرو", "ٹھہر جاؤ",
+        "ruko", "roko", "ruk jao", "band karo", "thahar jao",
+        # # Spanish variations
+        # "parar", "detener", "alto", "para", "detente", "espera",
+        # # French variations
+        # "arrêter", "arrêt", "stop", "halte", "pause", "attendre", "freiner", "éteindre",
+        # "désactiver", "cesser", "immobiliser", "tenir", "geler",
+        # # German variations
+        # "stopp", "halt", "anhalten", "pausieren", "warten", "bremsen", "ausschalten",
+        # "deaktivieren", "stillstehen", "bleiben", "einfrieren", "halten",
+        # # Italian variations
+        # "fermare", "fermati", "stop", "pausa", "aspetta", "frenare", "spegnere",
+        # "disattivare", "cessare", "bloccare", "immobile", "fermo", "arrestare",
+        # # Chinese variations (Simplified)
+        # "停止", "暂停", "等待", "刹车", "关闭", "停", "别动", "静止",
+        # # Japanese variations
+        # "停止", "ストップ", "止まれ", "止める", "待って", "ブレーキ", "オフ", "止まる", "中止",
+        # # Russian variations
+        # "стоп", "остановись", "пауза", "ждать", "тормоз", "выключить", "деактивировать",
+        # "прекратить", "держать", "замереть", "стоять", "замри",
+        # # Korean variations
+        # "멈춰", "정지", "멈추세요", "멈춤", "서", "스톱", "중지", "기다려", "그만",
+        # # Arabic variations
+        # "قف", "توقف", "انتظر", "أوقف", "كفى", "تمهل", "تعطيل", "إيقاف",
+        # # Turkish variations
+        # "dur", "durun", "durdur", "duraklat", "bekle", "durma", "fren", "durdur",
+        # # Polish variations
+        # "zatrzymaj", "stop", "stój", "wstrzymaj", "pauza", "hamuj", "czekaj", "zatrzymanie",
+        # # Dutch variations
+        # "stop", "halt", "houden", "wacht", "stoppen", "pauze", "rem", "stilstaan",
+        # # Portuguese variations
+        # "pare", "parar", "alto", "espera", "deter", "trava", "freio", "aguarde",
+        # # Swedish variations
+        # "stopp", "stanna", "håll", "pausa", "vänta", "broms", "avsluta", "stå still",
+        # # Finnish variations
+        # "seis", "pysähdy", "lopeta", "tauko", "jarruta", "odota", "keskeytä", "pysäytä",
         # Phonetic variations
         "stp", "stahp", "stoop", "brake now", "hault", "holt"
     ]
 }
+
+
+@lru_cache(maxsize=1)
+def _command_variation_catalog() -> Tuple[List[str], Dict[str, str]]:
+    """Cache flattened command variation list for global fuzzy matching."""
+    phrases: List[str] = []
+    lookup: Dict[str, str] = {}
+
+    for command, variations in WHEELCHAIR_COMMANDS.items():
+        canonical = command.lower().strip()
+        if canonical and canonical not in lookup:
+            lookup[canonical] = command
+            phrases.append(canonical)
+
+        for variation in variations:
+            normalized = variation.lower().strip()
+            if not normalized:
+                continue
+            if normalized not in lookup:
+                lookup[normalized] = command
+                phrases.append(normalized)
+
+    return phrases, lookup
+
+
+def _global_command_fuzzy_match(text: str) -> Optional[Tuple[str, float, str]]:
+    """Match arbitrary text to closest command variation using fuzzy scoring."""
+    if not RAPIDFUZZ_AVAILABLE:
+        return None
+
+    normalized = text.strip().lower()
+    if not normalized:
+        return None
+
+    phrases, lookup = _command_variation_catalog()
+    if not phrases:
+        return None
+
+    best = rapidfuzz_process.extractOne(
+        normalized,
+        phrases,
+        scorer=rapidfuzz_fuzz.WRatio,
+    )
+    if not best:
+        return None
+
+    phrase, score, _ = best
+    confidence = float(score) / 100.0
+    if confidence < 0.70:
+        return None
+
+    command = lookup.get(phrase)
+    if not command:
+        return None
+
+    return command, confidence, phrase
 
 def estimate_fundamental_frequency(audio, sample_rate):
     """
@@ -2263,11 +2509,16 @@ def hindi_direction_detector(text: str) -> Optional[str]:
     # If no direction found
     return None
 
-def process_command_with_whisper_tiny(audio_path=None, detect_lang=True, fast_mode=FAST_TRANSCRIPTION_ENABLED):
+def process_command_with_whisper_tiny(
+    audio_path=None,
+    detect_lang=True,
+    fast_mode=FAST_TRANSCRIPTION_ENABLED,
+    noise_reduction_blend: Optional[float] = None,
+):
     """
     Process voice command using Whisper tiny model directly.
     This function handles recording (if audio_path not provided),
-    transcription with Whisper tiny, and command matching.
+    translation with Whisper tiny, and command matching.
     
     Args:
         audio_path: Optional path to existing audio file. If None, will record new audio.
@@ -2275,7 +2526,7 @@ def process_command_with_whisper_tiny(audio_path=None, detect_lang=True, fast_mo
         fast_mode: Skip heavy denoising for lower latency on edge devices.
         
     Returns:
-        Tuple of (matched_command, confidence_score, transcription)
+        Tuple of (matched_command, confidence_score, translation)
     """
     # Record audio if path not provided
     if audio_path is None:
@@ -2309,39 +2560,54 @@ def process_command_with_whisper_tiny(audio_path=None, detect_lang=True, fast_mo
         
         # Process the audio for better voice command recognition
     try:
-        # First, determine which language to use for transcription
+        # First, determine which language to use for translation
         language_code = None  # Default: auto-detection
         
         if not detect_lang:
             # Use preset language if auto-detection is disabled
             language_code = DEFAULT_LANGUAGE
         
-        # Transcribe using Whisper tiny model directly
-        transcription, stt_success, stt_diag = transcribe_command_audio(
+        # Translate using Whisper tiny model directly
+        translation, stt_success, stt_diag = transcribe_command_audio(
             audio_path,
             language=language_code,
             fast_mode=fast_mode,
+            noise_reduction_blend=noise_reduction_blend,
         )
-        if not stt_success or not transcription:
-            print("Failed to transcribe audio or no speech detected.")
+        if not stt_success or not translation:
+            print("Failed to translate audio or no speech detected.")
             if stt_diag:
                 print(f"[STT Diagnostics] {json.dumps(stt_diag, indent=2)}")
-            return None, 0, transcription
+            return None, 0, translation
 
-        print(f"Transcription: '{transcription}'")
+        print(f"Translation: '{translation}'")
         if stt_diag:
             print(f"[STT Diagnostics] {json.dumps(stt_diag, indent=2)}")
         
         # Try Hindi direction detection first for better rotation command detection
-        hindi_command = hindi_direction_detector(transcription)
+        hindi_command = hindi_direction_detector(translation)
         if hindi_command:
             print(f"Found command through Hindi direction detector: '{hindi_command}'")
-            return hindi_command, 0.90, transcription  # High confidence for direct matches
+            return hindi_command, 0.90, translation  # High confidence for direct matches
             
-        # Match the transcription to a wheelchair command
-        command, confidence = match_command(transcription)
-        
-        return command, confidence, transcription
+        # Match the translated text to a wheelchair command
+        command, confidence = match_command(translation)
+
+        if (command is None or confidence < 0.60) and stt_diag:
+            raw_transcription = stt_diag.get("raw_transcription") if isinstance(stt_diag, dict) else None
+            if raw_transcription and raw_transcription.strip():
+                if raw_transcription.strip().lower() != translation.strip().lower():
+                    print("Translation mapping inconclusive; retrying with raw transcription...")
+                    print(f"Raw transcription candidate: '{raw_transcription}'")
+                fallback_command, fallback_confidence = match_command(raw_transcription)
+                if fallback_command:
+                    print(
+                        f"Using raw transcription match '{fallback_command}' "
+                        f"(confidence {fallback_confidence:.2f})"
+                    )
+                    return fallback_command, fallback_confidence, raw_transcription
+
+        return command, confidence, translation
         
     except Exception as e:
         print(f"Error processing command: {e}")
@@ -2758,46 +3024,29 @@ LANGUAGE_CODES = {
     'en': 'english',
     'hi': 'hindi',
     'mr': 'marathi',
-    'es': 'spanish',
-    'fr': 'french',
-    'de': 'german',
-    'it': 'italian',
-    'zh': 'chinese',
-    'ja': 'japanese',
-    'ru': 'russian',
-    'ko': 'korean',
-    'ar': 'arabic',
-    'tr': 'turkish',
-    'pl': 'polish',
-    'nl': 'dutch',
-    'pt': 'portuguese',
-    'sv': 'swedish',
-    'fi': 'finnish',
-    'cs': 'czech',
-    'da': 'danish',
-    'el': 'greek',
-    'fa': 'persian',
-    'he': 'hebrew',
-    'hu': 'hungarian',
-    'id': 'indonesian',
-    'no': 'norwegian',
-    'ro': 'romanian',
-    'sk': 'slovak',
-    'th': 'thai',
-    'uk': 'ukrainian',
-    'vi': 'vietnamese',
     'bn': 'bengali',
     'ta': 'tamil',
     'te': 'telugu',
     'ur': 'urdu',
     'ms': 'malay',
-    'tl': 'tagalog'
+    'tl': 'tagalog',
+    'pn': 'punjabi',
+    'kn': 'kannada',
+    'gu': 'gujarati',
+    'or': 'odia',
 }
 
-def transcribe_command_audio(audio_path, language=None, fast_mode=FAST_TRANSCRIPTION_ENABLED):
+def transcribe_command_audio(
+    audio_path,
+    language=None,
+    fast_mode=FAST_TRANSCRIPTION_ENABLED,
+    noise_reduction_blend: Optional[float] = None,
+):
     """
-    Transcribe audio command using Whisper tiny model directly.
-    Optimized for command recognition with language-specific processing.
+    Translate spoken command audio to English using Whisper tiny.
+    The function still performs any necessary preprocessing and captures
+    diagnostics for debugging, but the primary output string is an English
+    translation that will be matched against canonical commands.
     
     Args:
         audio_path: Path to the audio file
@@ -2805,7 +3054,7 @@ def transcribe_command_audio(audio_path, language=None, fast_mode=FAST_TRANSCRIP
                   If None, auto-detection will be used
                   
     Returns:
-        Tuple[str, bool, Dict[str, Any]]: (transcription, success flag, diagnostics)
+        Tuple[str, bool, Dict[str, Any]]: (translation, success flag, diagnostics)
     """
     diagnostics: Dict[str, Any] = {
         "language": language or "auto",
@@ -2836,7 +3085,8 @@ def transcribe_command_audio(audio_path, language=None, fast_mode=FAST_TRANSCRIP
         trimmed = trim_audio_to_speech(audio_data, sample_rate)
         diagnostics["trim_applied"] = bool(trimmed.size and trimmed.size != audio_data.size)
         working = trimmed if trimmed is not None and trimmed.size > 0 else audio_data
-        blend = float(max(0.0, min(1.0, STT_NOISE_REDUCTION_BLEND)))
+        blend_setting = STT_NOISE_REDUCTION_BLEND if noise_reduction_blend is None else noise_reduction_blend
+        blend = float(max(0.0, min(1.0, blend_setting)))
         if blend > 0.0:
             working = apply_subtle_noise_reduction(working, sample_rate, blend)
         gated = fast_noise_gate(working, sample_rate)
@@ -2849,7 +3099,8 @@ def transcribe_command_audio(audio_path, language=None, fast_mode=FAST_TRANSCRIP
             trimmed = trim_audio_to_speech(audio_data, sample_rate)
             diagnostics["trim_applied"] = bool(trimmed.size and trimmed.size != audio_data.size)
             working = trimmed if trimmed is not None and trimmed.size > 0 else audio_data
-            blend = float(max(0.0, min(1.0, STT_NOISE_REDUCTION_BLEND)))
+            blend_setting = STT_NOISE_REDUCTION_BLEND if noise_reduction_blend is None else noise_reduction_blend
+            blend = float(max(0.0, min(1.0, blend_setting)))
             if blend > 0.0:
                 working = apply_subtle_noise_reduction(working, sample_rate, blend)
             gated = fast_noise_gate(working, sample_rate)
@@ -2875,7 +3126,7 @@ def transcribe_command_audio(audio_path, language=None, fast_mode=FAST_TRANSCRIP
     audio_processed = np.ascontiguousarray(audio_processed, dtype=np.float32)
     diagnostics["processed_duration_s"] = round(float(audio_processed.size) / float(sample_rate), 3)
 
-    generate_kwargs = {"task": "transcribe"}
+    generate_kwargs = {"task": "translate"}
     if language:
         generate_kwargs["language"] = language
     diagnostics["generate_kwargs"] = dict(generate_kwargs)
@@ -2884,16 +3135,41 @@ def transcribe_command_audio(audio_path, language=None, fast_mode=FAST_TRANSCRIP
         start_time = time.time()
         result = pipeline(audio_processed, generate_kwargs=generate_kwargs)
         elapsed = time.time() - start_time
-        transcription = result.get("text", "").strip()
+        translation = result.get("text", "").strip()
         diagnostics.update({
             "inference_seconds": round(elapsed, 3),
-            "transcription_length": len(transcription),
+            "translation_length": len(translation),
+            "detected_language": result.get("language"),
         })
-        print(f"Whisper tiny transcription: '{transcription}' ({elapsed:.2f}s)")
-        return transcription, True, diagnostics
+
+        raw_transcription = ""
+        raw_kwargs = {"task": "transcribe"}
+        if language:
+            raw_kwargs["language"] = language
+        try:
+            raw_start = time.time()
+            raw_result = pipeline(audio_processed, generate_kwargs=raw_kwargs)
+            raw_elapsed = time.time() - raw_start
+            raw_transcription = raw_result.get("text", "").strip()
+            diagnostics.update({
+                "raw_transcription": raw_transcription,
+                "raw_inference_seconds": round(raw_elapsed, 3),
+            })
+        except Exception as raw_exc:
+            diagnostics["raw_transcription_error"] = str(raw_exc)
+
+        if not translation and raw_transcription:
+            diagnostics["translation_empty"] = True
+            translation = raw_transcription
+
+        print(f"Whisper tiny translation: '{translation}' ({elapsed:.2f}s)")
+        if raw_transcription and raw_transcription != translation:
+            print(f"Whisper tiny raw transcript: '{raw_transcription}'")
+
+        return translation, True, diagnostics
     except Exception as e:
         diagnostics.update({"error": str(e)})
-        print(f"Error transcribing command audio: {e}")
+        print(f"Error translating command audio: {e}")
         return "", False, diagnostics
 
 # --- Command Processing Functions ---
@@ -3029,6 +3305,294 @@ def _language_for_phrase(phrase: str) -> str:
     return detected or "unknown"
 
 
+COMMAND_KEYWORDS: Dict[str, Set[str]] = {
+    "forward": {
+        "forward",
+        "ahead",
+        "straight",
+        "straightforward",
+        "front",
+        "advance",
+        "move",
+        "march",
+        "saral",
+        "sidha",
+        "seedha",
+        "seedhe",
+        "aage",
+        "aagey",
+        "age",
+        "agey",
+        "agay",
+        "aagay",
+        "pudhe",
+        "pudhechal",
+        "pudhe chal",
+        "pude",
+        "pudechal",
+        "pude chal",
+        "pudeachal",
+        "pude achal",
+        "badho",
+        "badhao",
+        "bado",
+        "barho",
+        "shamne",
+        "munne",
+        "neraga",
+        "sadheval",
+        "sadeval",
+        "sadhe val",
+        "sade val",
+        "pulechal",
+        "purechal",
+        "pule chal",
+        "pure chal",
+    },
+    "backward": {
+        "back",
+        "backward",
+        "backwards",
+        "reverse",
+        "rear",
+        "return",
+        "retreat",
+        "maghe",
+        "mage",
+        "piche",
+        "peeche",
+        "pichhe",
+        "peechey",
+        "peechay",
+        "peechhe",
+        "ulta",
+        "vaapas",
+        "wapas",
+        "back up",
+    },
+    "left": {
+        "left",
+        "leftward",
+        "turn left",
+        "move left",
+        "shift left",
+        "slide left",
+        "khabbey",
+        "khabe",
+        "davikade",
+        "davi",
+        "davya",
+        "davya kade",
+        "baaye",
+        "baye",
+        "bayen",
+        "baen",
+        "bai",
+        "bye",
+        "bame",
+        "bam",
+        "edakke",
+        "idathu",
+        "idama",
+        "bam dike",
+        "baayin",
+    },
+    "right": {
+        "right",
+        "rightward",
+        "turn right",
+        "move right",
+        "shift right",
+        "slide right",
+        "sajje",
+        "saje",
+        "ujavikade",
+        "ujavi",
+        "ujya",
+        "daaye",
+        "daye",
+        "daen",
+        "dai",
+        "dayen",
+        "daayen",
+        "jamne",
+        "balakke",
+        "valathu",
+        "dayan",
+        "dahine",
+        "dahini",
+    },
+    "rotate_left": {
+        "rotate",
+        "rotation",
+        "spin",
+        "circle",
+        "loop",
+        "turn around",
+        "counterclockwise",
+        "counter-clockwise",
+        "counter clockwise",
+        "anti clockwise",
+        "anticlockwise",
+        "left",
+        "spin left",
+        "rotate left",
+        "ghumo",
+        "ghumao",
+        "ghoom",
+        "ghum",
+        "ghoomo",
+    },
+    "rotate_right": {
+        "rotate",
+        "rotation",
+        "spin",
+        "circle",
+        "loop",
+        "turn around",
+        "clockwise",
+        "clock-wise",
+        "clock wise",
+        "right",
+        "spin right",
+        "rotate right",
+        "ghumo",
+        "ghumao",
+        "ghoom",
+        "ghum",
+        "ghoomo",
+    },
+    "start": {
+        "start",
+        "begin",
+        "resume",
+        "initiate",
+        "activate",
+        "enable",
+        "power on",
+        "power up",
+        "switch on",
+        "turn on",
+        "turn it on",
+        "launch",
+        "go",
+        "let's",
+        "lets",
+        "move",
+        "chalu",
+        "chaloo",
+        "shuru",
+        "suru",
+        "prarambh",
+        "on",
+        "start up",
+        "get started",
+    },
+    "stop": {
+        "stop",
+        "halt",
+        "wait",
+        "pause",
+        "hold",
+        "freeze",
+        "brake",
+        "cease",
+        "ruko",
+        "roko",
+        "ruk",
+        "rukjao",
+        "band",
+        "bas",
+        "thamba",
+        "thamb",
+        "tham",
+        "thahar",
+        "thehro",
+        "off",
+        "shutdown",
+        "stop now",
+        "shut down",
+    },
+}
+
+
+def _command_keywords_match(command: str, corpus: str, expanded_tokens: List[str]) -> bool:
+    """Validate that the candidate command has at least one supporting keyword."""
+    keywords = COMMAND_KEYWORDS.get(command)
+    if not keywords:
+        return True
+
+    import re
+
+    corpus_lower = corpus.lower()
+    tokens_in_corpus = [token for token in corpus_lower.split() if token]
+    tokens_in_corpus = [token for token in tokens_in_corpus if token not in {"'", ""}]
+
+    token_set: Set[str] = {token.lower() for token in expanded_tokens if token}
+    token_set.update(tokens_in_corpus)
+    token_set.update({re.sub(r"[^a-z0-9]+", "", tok) for tok in tokens_in_corpus if tok})
+
+    for window in (2, 3):
+        if len(tokens_in_corpus) >= window:
+            for idx in range(len(tokens_in_corpus) - window + 1):
+                chunk = tokens_in_corpus[idx:idx + window]
+                joined = "".join(chunk)
+                spaced = " ".join(chunk)
+                token_set.add(joined)
+                token_set.add(spaced)
+                token_set.add(re.sub(r"[^a-z0-9]+", "", joined))
+                token_set.add(re.sub(r"[^a-z0-9]+", "", spaced))
+
+    token_set.discard("")
+
+    corpus_compact = re.sub(r"[^a-z0-9]+", "", corpus_lower)
+
+    for keyword in keywords:
+        keyword_lower = keyword.lower().replace(" ", "")
+        if keyword_lower in corpus_compact or keyword_lower in token_set:
+            return True
+        if keyword_lower in corpus_lower:
+            return True
+
+    if RAPIDFUZZ_AVAILABLE:
+        def adaptive_threshold(word: str) -> int:
+            length = len(word)
+            if length <= 3:
+                return 94
+            if length <= 5:
+                return 86
+            if length <= 7:
+                return 82
+            return 76
+
+        variation_threshold = 78
+
+        for keyword in keywords:
+            keyword_lower = keyword.lower()
+            threshold = adaptive_threshold(keyword_lower)
+            if rapidfuzz_fuzz.partial_ratio(keyword_lower, corpus_lower) >= threshold:
+                return True
+            if corpus_compact and rapidfuzz_fuzz.partial_ratio(keyword_lower, corpus_compact) >= threshold:
+                return True
+            for token in token_set:
+                if rapidfuzz_fuzz.partial_ratio(keyword_lower, token) >= threshold:
+                    return True
+                if rapidfuzz_fuzz.token_set_ratio(keyword_lower, token) >= threshold:
+                    return True
+
+            if rapidfuzz_fuzz.WRatio(keyword_lower, corpus_lower) >= max(threshold + 8, 88):
+                return True
+
+        for variation in WHEELCHAIR_COMMANDS.get(command, []):
+            variation_lower = variation.lower()
+            if rapidfuzz_fuzz.partial_ratio(variation_lower, corpus_lower) >= variation_threshold:
+                return True
+            if corpus_compact and rapidfuzz_fuzz.partial_ratio(variation_lower, corpus_compact) >= variation_threshold:
+                return True
+
+    return False
+
+
 def match_command(transcribed_text):
     """Match transcription to a wheelchair command using language-aware highest scores."""
     if not transcribed_text:
@@ -3039,6 +3603,20 @@ def match_command(transcribed_text):
 
     original_text = transcribed_text.lower().strip()
     text = re.sub(r"[.!?,;:।]", "", original_text)
+
+    def attempt_global_fuzzy(*candidate_texts: str) -> Tuple[Optional[str], float]:
+        for candidate_text in candidate_texts:
+            if not candidate_text:
+                continue
+            result = _global_command_fuzzy_match(candidate_text)
+            if result:
+                fallback_cmd, fallback_score, fallback_phrase = result
+                print(
+                    f"Fallback fuzzy match -> '{fallback_cmd}' via '{fallback_phrase}' "
+                    f"(confidence {fallback_score:.2f})"
+                )
+                return fallback_cmd, fallback_score
+        return None, 0.0
 
     vote_totals: Dict[str, float] = defaultdict(float)
     vote_counts: Dict[str, int] = defaultdict(int)
@@ -3185,10 +3763,9 @@ def match_command(transcribed_text):
     words = text.split()
 
     phonetic_variants = {
-        "bye": ["baaye", "baye", "by", "bai", "bay", "buy"],
-        "bay": ["baaye", "baye", "bai", "by", "buy"],
-        "buy": ["baaye", "baye", "bai", "by", "bay"],
-        "bai": ["baaye", "baye", "bay", "by", "buy"],
+        "bay": ["baaye", "baye", "bai"],
+        "buy": ["baaye", "baye", "bai"],
+        "bai": ["baaye", "baye", "bay", "buy"],
         "left": ["lift", "laft", "lft", "lef"],
         "veer": ["vir", "beer", "veer"],
         "rotate": ["rotation", "rote", "rotee", "roate"],
@@ -3208,6 +3785,22 @@ def match_command(transcribed_text):
         "stop": ["stp", "stahp", "stoop", "hault", "holt"],
         "chalo": ["challo", "chal", "chalu", "challu", "cello"],
         "karo": ["kro", "karro", "karho", "kero", "kiro"],
+        "aage": ["agay", "aagay", "aagey", "age", "agge", "aagee", "aageh", "agaye"],
+        "agay": ["aage", "aagay", "aagey", "age", "agge", "aagee"],
+        "badho": ["badhao", "bado", "bardho", "barho", "badha"],
+        "badhao": ["badho", "badha", "bardho", "barho", "badavo"],
+        "seedhe": ["sidhe", "sidha", "seedha", "sidhey", "seede", "seedey"],
+        "sidhe": ["seedhe", "sidha", "seedha", "sidhey", "seede"],
+        "pudhe": ["pude", "pudhe", "pudhey", "pudhee", "pudh", "puday"],
+        "pude": ["pudhe", "pudey", "pudhee", "puday", "pudde"],
+        "saral": ["sarl", "saralh", "sarlh", "sarall"],
+        "peeche": ["piche", "peechay", "peechhe", "peechey", "pichey", "peechai"],
+        "piche": ["peeche", "peechay", "peechhe", "peechey", "pichy"],
+        "mage": ["maghe", "maage", "magay", "magey", "mague"],
+        "maghe": ["mage", "magey", "maghey", "mange", "magheh"],
+        "vaapas": ["wapas", "wapis", "vapas", "vaaps", "waapas"],
+        "shuru": ["sharoo", "shuroo", "shroo", "shru", "shruu"],
+        "start": ["stat", "strt", "starrt", "stard"],
     }
 
     expanded_words = list(words)
@@ -3221,7 +3814,7 @@ def match_command(transcribed_text):
     print(f"Expanded word list: {expanded_words}")
 
     command_patterns = [
-        {"pattern": ["baaye", "baye", "by", "bye"], "command": "left", "score": 0.85, "language": "hi"},
+        {"pattern": ["baaye", "baye", "bai"], "command": "left", "score": 0.85, "language": "hi"},
         {"pattern": ["daaye", "daye", "day", "die"], "command": "right", "score": 0.85, "language": "hi"},
         {"pattern": ["aage", "seedhe", "forward"], "command": "forward", "score": 0.85, "language": "hi"},
         {"pattern": ["peeche", "back", "vaapas"], "command": "backward", "score": 0.85, "language": "hi"},
@@ -3302,12 +3895,17 @@ def match_command(transcribed_text):
                 word_overlap_score = len(common_words) / len(variation_word_set) * 0.95
                 similarity = max(similarity, word_overlap_score)
 
+            token_score = 0.0
+            partial_score = 0.0
             if RAPIDFUZZ_AVAILABLE:
                 token_score = rapidfuzz_fuzz.token_set_ratio(text, variation_lower) / 100.0
                 partial_score = rapidfuzz_fuzz.partial_ratio(text, variation_lower) / 100.0
                 similarity = max(similarity, token_score, partial_score)
 
-            if similarity >= 0.45 and (not rotation_command or allow_rotation_scoring):
+            passes_shared = bool(common_words) and similarity >= 0.45
+            passes_strong = similarity >= 0.75 or token_score >= 0.78 or partial_score >= 0.78
+
+            if (passes_shared or passes_strong) and (not rotation_command or allow_rotation_scoring):
                 record_vote(cmd, similarity, f"fuzzy match '{variation}'", language_hint=variation_language)
 
             if "mudo" in variation and ("baaye" in variation or "daaye" in variation):
@@ -3325,6 +3923,9 @@ def match_command(transcribed_text):
                         record_vote(cmd, 0.9, "Hindi right special", language_hint="hi")
 
     if not vote_details:
+        fallback_cmd, fallback_score = attempt_global_fuzzy(original_text, text)
+        if fallback_cmd:
+            return fallback_cmd, fallback_score
         return None, best_single_score
 
     command_stats: Dict[str, Dict[str, Any]] = {}
@@ -3341,17 +3942,17 @@ def match_command(transcribed_text):
         }
 
     if not command_stats:
+        fallback_cmd, fallback_score = attempt_global_fuzzy(original_text, text)
+        if fallback_cmd:
+            return fallback_cmd, fallback_score
         return None, best_single_score
 
-    global_best_cmd, global_best_data = max(
-        command_stats.items(), key=lambda item: item[1]["best"][0]
+    sorted_by_best = sorted(
+        command_stats.items(), key=lambda item: item[1]["best"][0], reverse=True
     )
-    global_best_entry = global_best_data["best"]
 
     print("Command score summary:")
-    for cmd, stats in sorted(
-        command_stats.items(), key=lambda item: item[1]["best"][0], reverse=True
-    ):
+    for cmd, stats in sorted_by_best:
         best_score, best_reason, best_lang = stats["best"]
         lang_note = f" lang={best_lang}" if best_lang not in {"unknown", ""} else ""
         print(
@@ -3359,13 +3960,73 @@ def match_command(transcribed_text):
             f"avg={stats['avg']:.2f}; votes={stats['count']}; total={stats['total']:.2f}"
         )
 
-    if best_single_match and best_single_detail:
-        chosen_cmd = best_single_match
-        chosen_score, chosen_reason, chosen_lang = best_single_detail
-    else:
-        chosen_cmd = global_best_cmd
-        chosen_score, chosen_reason, chosen_lang = global_best_entry
-    min_threshold = 0.55 if chosen_cmd == "stop" else 0.50
+    candidate_order: List[str] = []
+    if best_single_match and best_single_match in command_stats:
+        candidate_order.append(best_single_match)
+    for cmd, _ in sorted_by_best:
+        if cmd not in candidate_order:
+            candidate_order.append(cmd)
+
+    chosen_cmd: Optional[str] = None
+    chosen_score = 0.0
+    chosen_reason = ""
+    chosen_lang = "unknown"
+
+    for candidate in candidate_order:
+        if candidate not in command_stats:
+            continue
+        candidate_entry = (
+            best_single_detail
+            if candidate == best_single_match and best_single_detail
+            else command_stats[candidate]["best"]
+        )
+        candidate_score, candidate_reason, candidate_lang = candidate_entry
+        if candidate_score >= 0.70:
+            chosen_cmd = candidate
+            chosen_score = candidate_score
+            chosen_reason = candidate_reason
+            chosen_lang = candidate_lang
+            break
+        if not _command_keywords_match(candidate, original_text, expanded_words):
+            print(
+                f"Keyword validation failed for '{candidate}'. Translation lacks expected intent markers."
+            )
+            continue
+        chosen_cmd = candidate
+        chosen_score = candidate_score
+        chosen_reason = candidate_reason
+        chosen_lang = candidate_lang
+        break
+
+    if not chosen_cmd:
+        print("No command passed keyword validation; attempting global fuzzy match")
+        fallback_cmd, fallback_score = attempt_global_fuzzy(original_text, text)
+        if fallback_cmd:
+            return fallback_cmd, fallback_score
+        fallback_score = max(
+            [best_single_score]
+            + [stats["best"][0] for stats in command_stats.values()]
+        )
+        return None, fallback_score
+
+    runner_up_score = 0.0
+    if len(command_stats) > 1:
+        runner_up_score = max(
+            stats["best"][0]
+            for cmd, stats in command_stats.items()
+            if cmd != chosen_cmd
+        )
+
+    if chosen_score - runner_up_score < 0.10 and chosen_score < 0.75:
+        print(
+            f"Command ambiguity detected (top score {chosen_score:.2f} vs next {runner_up_score:.2f}); attempting global fuzzy match"
+        )
+        fallback_cmd, fallback_score = attempt_global_fuzzy(original_text, text)
+        if fallback_cmd:
+            return fallback_cmd, fallback_score
+        return None, max(best_single_score, runner_up_score, chosen_score)
+
+    min_threshold = 0.70
 
     lang_note = f", lang={chosen_lang}" if chosen_lang not in {"unknown", ""} else ""
     print(
@@ -3378,8 +4039,11 @@ def match_command(transcribed_text):
 
     print(
         f"Top candidate '{chosen_cmd}' below threshold {min_threshold:.2f} "
-        f"(score={chosen_score:.2f}); no command issued"
+        f"(score={chosen_score:.2f}); attempting global fuzzy match"
     )
+    fallback_cmd, fallback_score = attempt_global_fuzzy(original_text, text)
+    if fallback_cmd:
+        return fallback_cmd, fallback_score
     return None, max(best_single_score, chosen_score)
 
 def execute_command(command):
@@ -3926,7 +4590,7 @@ def online_llm_mode(encoder):
 def command_control_mode(encoder):
     """
     Mode 2: Voice Command Control Mode
-    Records audio, authenticates the user, transcribes speech using Whisper tiny,
+    Records audio, authenticates the user, translates speech using Whisper tiny,
     matches to predefined commands, and executes the command.
     Includes detailed diagnostics for better troubleshooting.
     """
@@ -3947,13 +4611,13 @@ def command_control_mode(encoder):
     start_time = time.time()
     
     # Using our new direct Whisper tiny function instead of the legacy process_voice_command
-    command, confidence, transcription = process_command_with_whisper_tiny(processed_path)
+    command, confidence, translation = process_command_with_whisper_tiny(processed_path)
     processing_time = time.time() - start_time
     
     print(f"\n[DIAGNOSTICS] Command processing completed in {processing_time:.2f} seconds")
     print(f"[DIAGNOSTICS] Command: {command or 'None'}, Confidence: {confidence:.2f}")
-    if transcription:
-        print(f"[DIAGNOSTICS] Transcription: {transcription}")
+    if translation:
+        print(f"[DIAGNOSTICS] Translation: {translation}")
     
     # Define confidence thresholds
     EXECUTE_THRESHOLD = 0.5    # Execute command confidently
@@ -4304,20 +4968,20 @@ def main():
             print("\n")
             
             # Record and process command
-            command, confidence, transcription = process_command_with_whisper_tiny(None, detect_lang=True)
+            command, confidence, translation = process_command_with_whisper_tiny(None, detect_lang=True)
             
             if command:
                 print(f"\nRecognized command: '{command}' with confidence {confidence:.2f}")
                 
-                detected_language = detect_language(transcription)
+                detected_language = detect_language(translation)
                 print(f"Detected language: {detected_language} ({LANGUAGE_CODES.get(detected_language, 'Unknown')})")
                 
                 # Execute command with language-specific feedback
                 execute_command_with_language_feedback(command, detected_language)
             else:
                 print("\nNo command recognized. Please try again with a clearer voice command.")
-                if transcription:
-                    print(f"Heard: {transcription}")
+                if translation:
+                    print(f"Heard: {translation}")
         elif choice == "6":
             # Test TTS voices
             test_tts_voices()
