@@ -257,7 +257,7 @@ SYSTEM_PROMPT = (
 )
 
 SAMPLE_RATE = RS_SAMPLING_RATE
-RECORD_DURATION = 2
+RECORD_DURATION = 3
 SIMILARITY_THRESHOLD = 0.10
 SPEAKER_NOISE_REDUCTION_BLEND = 0.10  # Portion of denoised signal to mix into embeddings (0.0 disables)
 SPEAKER_EMBED_SEGMENT_SECONDS = 0.95  # Duration per chunk when averaging embeddings
@@ -269,7 +269,7 @@ SPEAKER_SEGMENT_RMS_FLOOR = 0.007  # Absolute RMS floor for segment inclusion
 SPEAKER_VARIANT_SUPPORT_WINDOW = 0.035  # Score gap within which sibling embeddings reinforce the match
 SPEAKER_VARIANT_SUPPORT_STEP = 0.015  # Bonus per additional supporting embedding beyond the strongest
 SPEAKER_VARIANT_SUPPORT_MAX = 0.045  # Cap on cumulative bonus from the same speaker's variants
-SPEAKER_MIN_SCORE_GAP = 0.06  # Minimum lead over runner-up to accept authentication
+SPEAKER_MIN_SCORE_GAP = 0.00  # Minimum lead over runner-up to accept authentication (0 = disabled)
 SPEAKER_SCORE_GAIN = 1.18  # Multiplicative boost applied to raw similarity before bonuses
 SPEAKER_SCORE_OFFSET = 0.030  # Additive boost applied to raw similarity before bonuses
 SPEAKER_SCORE_AVG_WEIGHT = 0.35  # Weight applied to average variant similarity during calibration
@@ -909,14 +909,15 @@ def _load_audio_16k(path):
 
 
 def load_local_stt_pipeline(force_autodetect=False):
-    """Load Whisper Tiny pipeline with ARM-friendly fallback."""
+    """Load Whisper Tiny pipeline with faster-whisper backend prioritized for speed."""
     global _stt_pipe
     if _stt_pipe is not None:
         return _stt_pipe
 
-    prefers_lightweight_backend = platform.machine().lower().startswith(("arm", "aarch"))
-
-    if prefers_lightweight_backend and not force_autodetect:
+    # Always try faster-whisper first for maximum speed (unless explicitly disabled)
+    force_transformers = os.getenv("FORCE_TRANSFORMERS", "").lower() in ("1", "true", "yes")
+    
+    if not force_transformers and not force_autodetect:
         try:
             fw_module = importlib.import_module("faster_whisper")
             WhisperModel = getattr(fw_module, "WhisperModel")
@@ -944,10 +945,10 @@ def load_local_stt_pipeline(force_autodetect=False):
                         temperature=0.0,
                         condition_on_previous_text=False,
                         compression_ratio_threshold=2.4,
-                        log_prob_threshold=-0.1,
-                        no_speech_threshold=0.65,
+                        log_prob_threshold=-1.0,  # More lenient for speed
+                        no_speech_threshold=0.6,
                         without_timestamps=True,
-                        vad_filter=False,
+                        vad_filter=True,  # Enable VAD for automatic speedup
                         suppress_blank=True,
                     )
 
@@ -1501,7 +1502,7 @@ def test_voice_authentication_internal(encoder):
 
 # --- Global Configuration ---
 SAMPLE_RATE = RS_SAMPLING_RATE  # 16000 Hz
-RECORD_DURATION = 5  # seconds
+RECORD_DURATION = 3  # seconds
 SIMILARITY_THRESHOLD = 0.00  # Match threshold for voice authentication
 VOICE_DB_PROCESSED_DIR = Path("./voice_db_processed")
 VOICE_DB_EMBEDDINGS_DIR = Path("./voice_db_embeddings")
@@ -1691,6 +1692,18 @@ WHEELCHAIR_COMMANDS = {
         # "eteenpäin", "suoraan", "mene eteenpäin", "etene", "suoraan eteenpäin",
         # # Simple phonetic variations that may come from ASR errors
         "go for word", "ford", "foreward", "forword", "farward"
+        # Additional common mispronunciations and ASR errors
+        # Comprehensive Marathi/Hindi forward command combinations
+        "pudhe ja", "pudhe jaa", "pudhe jao", "pudhe chala", "pudhe chaal", "pudhe chal", "pudhe chalo",
+        "pudhe vada", "pudhe badho", "pudhe badh",
+        "pude ja", "pude jaa", "pude jao", "pude chala", "pude chaal"
+        "pudhay ja", "pudhay chala", "puday ja", "puday chala",
+        "fwd", "forward go", "move fwd", "go fwd", "foward", "forwrd", "forwd",
+        "pooda", "poode", "pood", "puude", "puda", "pooda chal", "pude chal go",
+        "pudechal", "pudhe chal", "pude move", "pudhey", "pudhay", "pudha",
+        "aagay", "agge", "aage ja", "age", "agay", "aage go", "age chalo",
+        "straight go", "go str8", "str8", "strght", "strayt", "strait",
+        "go go go", "keep go", "go on", "onwards", "move on", "proceed now"
     ],
     
     # Backward command variations
@@ -1750,6 +1763,26 @@ WHEELCHAIR_COMMANDS = {
         # # Dutch variations
         # "achteruit", "terug", "ga terug", "achterwaarts", "keer terug", "terugrijden",
         # # Portuguese variations
+        # Additional common variations
+        "bwd", "back go", "go bwd", "bakk", "bak ja", "back move",
+        # Marathi/Hindi phonetic variations from Whisper errors
+        "ujavikade fira", "ujavikade phira", "ujavikade gol fira", "ujavikade gol phira", "ujavikade goal fira",
+        "ujavikade chala", "ujavikade chaal", "ujavikade chal", "ujavikade chalo",
+        "ujavikade vala", "ujavikade vaal", "ujavikade val",
+        "ujavikade ja", "ujavikade jaa", "ujavikade jao",
+        "ujavikade valun ja", "ujavikade valun jaa",
+        "ujavikade saraka", "ujavikade sarak",
+        "ujaavikade fira", "ujaavikade chala", "ujaavikade ja",
+        "ujavi kade fira", "ujavi kade chala", "ujavi kade ja",
+        "ujya kade fira", "ujya kade chala", "ujya kade ja",
+        "ujvi bazula ja", "ujvi fira", "ujvi chala",
+        "mage da", "magy", "magy da", "mage de", "maghe de", "fira", "phira", "viral", "gol fira", "gol phira",
+        # Comprehensive Marathi/Hindi backward command combinations
+        "mage fira", "mage phira", "mage ja", "mage jaa", "mage jao", "mage chala", "mage chal", "mage hato", "mage hat",
+        "maghe fira", "maghe phira", "maghe ja", "maghe chala", "maghe hato",
+        "magy fira", "magy ja", "magy chala", "magy de",
+        "reverse now", "back back", "go bak", "peeche move", "piche",
+        "reverse go", "reverse move", "back it", "bakk it", "rvrse"
         # "para trás", "retroceder", "voltar", "recuar", "ré", "marcha atrás",
         # # Swedish variations
         # "bakåt", "backa", "gå bakåt", "tillbaka", "återgå", "reträtt",
@@ -1829,6 +1862,21 @@ WHEELCHAIR_COMMANDS = {
         # # Czech variations
         # "vlevo", "doleva", "odbočte doleva", "jděte doleva", "na levé straně", "levá strana",
         # Phonetic variations and common ASR mistakes
+        # Marathi phonetic variations from Whisper transcription errors
+        "davidare", "davikare", "daavi", "daavikade", "davi kare", "davikare gol", "davidare gol",
+        "daavi karayesh", "daavi kare", "karayesh", "gholpira", "gol fira", "gol phira", "goal fira",
+        # Comprehensive Marathi/Hindi direction + action combinations
+        "davikade fira", "davikade phira", "davikade gol fira", "davikade gol phira", "davikade goal fira",
+        "davikade chala", "davikade chaal", "davikade chal", "davikade chalo",
+        "davikade vala", "davikade vaal", "davikade val",
+        "davikade ja", "davikade jaa", "davikade jao",
+        "davikade valun ja", "davikade valun jaa",
+        "davikade saraka", "davikade sarak",
+        "davikade firun ja", "davikade firun jaa",
+        "daavikade fira", "daavikade phira", "daavikade gol fira", "daavikade chala", "daavikade ja",
+        "davi kare fira", "davi kare chala", "davi kare ja",
+        "daavi kade fira", "daavi kade chala", "daavi kade ja",
+        "davya kade fira", "davya kade chala", "davya kade ja",
         "lift", "leafed", "laft", "lft", "lef", "leven", "lefty", "läft"
     ],
     
@@ -3126,47 +3174,35 @@ def transcribe_command_audio(
     audio_processed = np.ascontiguousarray(audio_processed, dtype=np.float32)
     diagnostics["processed_duration_s"] = round(float(audio_processed.size) / float(sample_rate), 3)
 
-    generate_kwargs = {"task": "translate"}
+    # Force Hindi language for multilingual support (handles Hindi, Marathi, Hinglish)
+    # This prevents Whisper from incorrectly detecting as Arabic, Tamil, etc.
+    # Hindi mode outputs roman script which works well for all Indic languages
+    generate_kwargs = {"task": "transcribe"}
     if language:
         generate_kwargs["language"] = language
+    else:
+        # Force Hindi to handle Hindi/Marathi/Hinglish with roman output
+        generate_kwargs["language"] = "hi"
     diagnostics["generate_kwargs"] = dict(generate_kwargs)
 
     try:
         start_time = time.time()
         result = pipeline(audio_processed, generate_kwargs=generate_kwargs)
         elapsed = time.time() - start_time
-        translation = result.get("text", "").strip()
+        transcription = result.get("text", "").strip()
         diagnostics.update({
             "inference_seconds": round(elapsed, 3),
-            "translation_length": len(translation),
+            "transcription_length": len(transcription),
             "detected_language": result.get("language"),
         })
 
-        raw_transcription = ""
-        raw_kwargs = {"task": "transcribe"}
-        if language:
-            raw_kwargs["language"] = language
-        try:
-            raw_start = time.time()
-            raw_result = pipeline(audio_processed, generate_kwargs=raw_kwargs)
-            raw_elapsed = time.time() - raw_start
-            raw_transcription = raw_result.get("text", "").strip()
-            diagnostics.update({
-                "raw_transcription": raw_transcription,
-                "raw_inference_seconds": round(raw_elapsed, 3),
-            })
-        except Exception as raw_exc:
-            diagnostics["raw_transcription_error"] = str(raw_exc)
+        if not transcription:
+            diagnostics["transcription_empty"] = True
+            return "", False, diagnostics
 
-        if not translation and raw_transcription:
-            diagnostics["translation_empty"] = True
-            translation = raw_transcription
+        print(f"Whisper tiny transcription: '{transcription}' ({elapsed:.2f}s)")
 
-        print(f"Whisper tiny translation: '{translation}' ({elapsed:.2f}s)")
-        if raw_transcription and raw_transcription != translation:
-            print(f"Whisper tiny raw transcript: '{raw_transcription}'")
-
-        return translation, True, diagnostics
+        return transcription, True, diagnostics
     except Exception as e:
         diagnostics.update({"error": str(e)})
         print(f"Error translating command audio: {e}")
