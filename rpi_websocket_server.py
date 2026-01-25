@@ -17,6 +17,7 @@ Date: November 2024
 """
 
 import asyncio
+import contextlib
 import websockets
 import json
 import numpy as np
@@ -26,7 +27,12 @@ import time
 import sys
 import io
 import re
-from typing import Optional, Tuple
+import threading
+import queue
+import uuid
+import math
+from collections import deque
+from typing import Optional, Tuple, Callable, Awaitable
 from bluetooth_controller import BluetoothController, BLUETOOTH_AVAILABLE
 
 # GPIO control (only on Raspberry Pi)
@@ -56,6 +62,11 @@ from wheelchair_control import (
     load_local_stt_pipeline,
     load_speaker_recognizer,
     ENROLLMENT_PHRASES,
+    apply_subtle_noise_reduction,
+    fast_noise_gate,
+    trim_audio_to_speech,
+    ensure_minimum_duration,
+    USB_MIC_NOISE_REDUCTION_BLEND,
 )
 
 # Load configuration
@@ -68,6 +79,18 @@ WEBSOCKET_PORT = CONFIG['raspberry_pi']['websocket_port']
 SAMPLE_RATE = CONFIG['voice_processing']['sample_rate']
 TEMP_DIR = Path("./temp_ws_audio")
 TEMP_DIR.mkdir(exist_ok=True)
+
+COMMAND_CONFIDENCE_THRESHOLD = 0.70
+
+USB_MIC_CHUNK_SECONDS = 0.48
+USB_MIC_PRE_ROLL_SECONDS = 0.30
+USB_MIC_SILENCE_TIMEOUT_SECONDS = 0.70
+USB_MIC_MIN_COMMAND_SECONDS = 0.80
+USB_MIC_MAX_COMMAND_SECONDS = 5.0
+USB_MIC_START_RMS = 0.022
+USB_MIC_STOP_RMS = 0.015
+USB_MIC_MIN_RMS = 0.012
+USB_MIC_QUEUE_SIZE = 6
 
 COMMAND_TIMEOUT_SECONDS = float(CONFIG['raspberry_pi'].get('command_timeout_seconds', 1.5))
 JOYSTICK_TIMEOUT_SECONDS = float(CONFIG['raspberry_pi'].get('joystick_timeout_seconds', 0.2))
@@ -94,6 +117,45 @@ M_L_IN1 = MOTOR_PINS['motor_left_in1']
 M_L_IN2 = MOTOR_PINS['motor_left_in2']
 M_R_IN1 = MOTOR_PINS['motor_right_in1']
 M_R_IN2 = MOTOR_PINS['motor_right_in2']
+
+ULTRASONIC_CONFIG = CONFIG['raspberry_pi'].get('ultrasonic', {})
+ULTRASONIC_ENABLED = bool(ULTRASONIC_CONFIG.get('enabled', False))
+
+def _normalize_ultrasonic_sensors(config: dict) -> dict:
+    sensors: dict[str, dict[str, int]] = {}
+    raw_sensors = config.get('sensors') if isinstance(config, dict) else None
+    if isinstance(raw_sensors, dict):
+        for name, sensor_cfg in raw_sensors.items():
+            if not isinstance(sensor_cfg, dict):
+                continue
+            trig = int(sensor_cfg.get('trigger_pin', 0) or 0)
+            echo = int(sensor_cfg.get('echo_pin', 0) or 0)
+            if trig > 0 and echo > 0:
+                sensors[str(name)] = {"trigger": trig, "echo": echo}
+
+    if not sensors:
+        trig = int(config.get('trigger_pin', 0) or 0)
+        echo = int(config.get('echo_pin', 0) or 0)
+        if trig > 0 and echo > 0:
+            sensors['front'] = {"trigger": trig, "echo": echo}
+    return sensors
+
+ULTRASONIC_SENSOR_CONFIGS = _normalize_ultrasonic_sensors(ULTRASONIC_CONFIG)
+ULTRASONIC_SENSORS = {
+    name: (pins['trigger'], pins['echo'])
+    for name, pins in ULTRASONIC_SENSOR_CONFIGS.items()
+}
+
+ULTRASONIC_STOP_DISTANCE_CM = float(ULTRASONIC_CONFIG.get('stop_distance_cm', 30.0) or 30.0)
+ULTRASONIC_LOCK_DURATION = float(ULTRASONIC_CONFIG.get('lock_duration_seconds', 5.0) or 5.0)
+ULTRASONIC_POLL_INTERVAL = float(ULTRASONIC_CONFIG.get('poll_interval_seconds', 0.1) or 0.1)
+ULTRASONIC_RESET_MARGIN_CM = float(ULTRASONIC_CONFIG.get('reset_margin_cm', 5.0) or 5.0)
+ULTRASONIC_RESET_DISTANCE_CM = ULTRASONIC_STOP_DISTANCE_CM + max(0.0, ULTRASONIC_RESET_MARGIN_CM)
+ULTRASONIC_SAFETY_AVAILABLE = (
+    ULTRASONIC_ENABLED
+    and bool(ULTRASONIC_SENSORS)
+    and ULTRASONIC_STOP_DISTANCE_CM > 0.0
+)
 
 # =============================================================================
 # MOTOR CONTROL CLASS
@@ -205,6 +267,156 @@ class MotorController:
             print("GPIO cleaned up")
 
 
+class UltrasonicMonitor:
+    """Polls multiple ultrasonic distance sensors and triggers safety callbacks."""
+
+    def __init__(
+        self,
+        *,
+        loop: asyncio.AbstractEventLoop,
+        sensors: dict[str, Tuple[int, int]],
+        stop_distance_cm: float,
+        reset_distance_cm: float,
+        poll_interval: float,
+        on_obstacle: Callable[[str, float], Awaitable[None]],
+    ) -> None:
+        self.loop = loop
+        self.sensors = {
+            name: (int(trig), int(echo))
+            for name, (trig, echo) in sensors.items()
+            if int(trig) > 0 and int(echo) > 0
+        }
+        self.stop_distance_cm = float(stop_distance_cm)
+        self.reset_distance_cm = max(self.stop_distance_cm, float(reset_distance_cm))
+        self.poll_interval = max(0.05, float(poll_interval))
+        self._per_sensor_delay = max(0.0, self.poll_interval / max(1, len(self.sensors)))
+        self.on_obstacle = on_obstacle
+        self._task: Optional[asyncio.Task] = None
+        self._running = False
+        self._active_obstacles: set[str] = set()
+        self._latest_distances: dict[str, Optional[float]] = {
+            name: None for name in self.sensors
+        }
+        self._pulse_timeout = 0.05  # seconds to wait for echo edges
+
+    @property
+    def latest_distances(self) -> dict[str, Optional[float]]:
+        return dict(self._latest_distances)
+
+    def start(self) -> bool:
+        if not GPIO_AVAILABLE:
+            print("Ultrasonic monitor disabled: GPIO not available")
+            return False
+
+        if self._task is not None:
+            return True
+
+        if not self.sensors:
+            print("Ultrasonic monitor disabled: no sensors configured")
+            return False
+
+        try:
+            for trig, echo in self.sensors.values():
+                GPIO.setup(trig, GPIO.OUT, initial=GPIO.LOW)
+                GPIO.setup(echo, GPIO.IN)
+        except Exception as exc:
+            print(f"Failed to initialize ultrasonic sensor pins: {exc}")
+            return False
+
+        self._running = True
+        self._task = self.loop.create_task(self._run())
+        sensors_summary = ", ".join(
+            f"{name}(trig={trig}, echo={echo})" for name, (trig, echo) in self.sensors.items()
+        )
+        print(
+            "Ultrasonic safety active - sensors: "
+            f"{sensors_summary or 'none'}; stop <= {self.stop_distance_cm:.1f} cm"
+        )
+        return True
+
+    async def stop(self) -> None:
+        self._running = False
+        if self._task is not None:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+
+        if GPIO_AVAILABLE:
+            for trig, _ in self.sensors.values():
+                with contextlib.suppress(Exception):
+                    GPIO.output(trig, GPIO.LOW)
+
+    async def _run(self) -> None:
+        await asyncio.sleep(0.1)  # allow hardware to settle
+        try:
+            while self._running:
+                cycle_start = time.perf_counter()
+                for name, (trig, echo) in self.sensors.items():
+                    if not self._running:
+                        break
+                    distance = await asyncio.to_thread(self._measure_sensor, trig, echo)
+                    self._latest_distances[name] = distance
+
+                    if distance is not None:
+                        if distance <= self.stop_distance_cm:
+                            if name not in self._active_obstacles:
+                                self._active_obstacles.add(name)
+                                try:
+                                    await self.on_obstacle(name, distance)
+                                except Exception as exc:
+                                    print(f"Ultrasonic obstacle callback failed: {exc}")
+                        elif name in self._active_obstacles and distance >= self.reset_distance_cm:
+                            self._active_obstacles.discard(name)
+
+                    if self._per_sensor_delay > 0.0:
+                        await asyncio.sleep(self._per_sensor_delay)
+
+                if not self._running:
+                    break
+
+                elapsed = time.perf_counter() - cycle_start
+                remaining = max(0.0, self.poll_interval - elapsed)
+                if remaining > 0.0:
+                    await asyncio.sleep(remaining)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"Ultrasonic monitor stopped due to error: {exc}")
+
+    def _measure_sensor(self, trig: int, echo: int) -> Optional[float]:
+        if not GPIO_AVAILABLE:
+            return None
+
+        try:
+            GPIO.output(trig, GPIO.LOW)
+            time.sleep(0.0002)
+            GPIO.output(trig, GPIO.HIGH)
+            time.sleep(0.00001)
+            GPIO.output(trig, GPIO.LOW)
+
+            timeout_at = time.perf_counter() + self._pulse_timeout
+
+            while GPIO.input(echo) == 0:
+                if time.perf_counter() >= timeout_at:
+                    return None
+                time.sleep(0.00001)
+            pulse_start = time.perf_counter()
+
+            while GPIO.input(echo) == 1:
+                if time.perf_counter() >= timeout_at:
+                    return None
+                time.sleep(0.00001)
+            pulse_end = time.perf_counter()
+
+            distance_cm = (pulse_end - pulse_start) * 17150.0
+            if distance_cm < 0:
+                return 0.0
+            return distance_cm
+        except Exception as exc:
+            print(f"Ultrasonic read error: {exc}")
+            return None
+
 class CommandDispatcher:
     """Single-threaded command queue feeding the motor controller."""
 
@@ -240,21 +452,119 @@ class CommandDispatcher:
         self._last_joystick_vector = {"x": 0.0, "y": 0.0, "magnitude": 0.0}
         self._joystick_stop_streak = 0
         self._joystick_stop_burst_remaining = 0
+        self._safety_lock_until = 0.0
+        self._safety_lock_reason = ""
+        self._safety_lock_source = ""
+        self._safety_lock_metadata: dict = {}
+        self._safety_lock_timer = None
 
     async def submit_command(self, *, source: str, mode: str, payload: dict):
         future = self.loop.create_future()
         await self._queue.put((source, mode, payload, future))
         return await future
 
-    async def emergency_stop(self, *, source: str, reason: str = "emergency"):
+    async def emergency_stop(self, *, source: str, reason: str = "emergency", bypass_lock: bool = False):
         payload = {"command": "stop", "reason": reason}
+        if bypass_lock:
+            payload["_safety_bypass"] = True
         return await self.submit_command(source=source, mode="manual", payload=payload)
+
+    async def activate_safety_lock(
+        self,
+        *,
+        duration: float,
+        reason: str,
+        source: str,
+        metadata: Optional[dict] = None,
+    ) -> None:
+        duration = max(0.0, float(duration))
+        was_active = self._is_safety_lock_active()
+        if duration <= 0.0 and not was_active:
+            return
+
+        now = time.monotonic()
+        new_expiry = now + duration if duration > 0 else now
+        if was_active:
+            new_expiry = max(self._safety_lock_until, new_expiry)
+
+        self._safety_lock_until = new_expiry
+        self._safety_lock_reason = reason
+        self._safety_lock_source = source
+        self._safety_lock_metadata = dict(metadata or {})
+
+        if self._safety_lock_timer:
+            self._safety_lock_timer.cancel()
+
+        remaining = max(0.0, self._safety_lock_until - time.monotonic())
+        if remaining > 0.0:
+            self._safety_lock_timer = self.loop.call_later(remaining, self._on_safety_lock_expired)
+        else:
+            self._safety_lock_timer = None
+            self._on_safety_lock_expired()
+            return
+
+        self._cancel_manual_timeout()
+        self._cancel_joystick_timeout()
+
+        if self.event_callback is not None:
+            state = "extended" if was_active else "active"
+            event = {
+                "type": "safety_lock",
+                "state": state,
+                "source": source,
+                "reason": reason,
+                "duration": duration if not was_active else remaining,
+                "timestamp": time.time(),
+                "metadata": dict(self._safety_lock_metadata),
+            }
+            await self.event_callback(event)
+
+    def _is_safety_lock_active(self) -> bool:
+        if self._safety_lock_until <= 0.0:
+            return False
+        return time.monotonic() < self._safety_lock_until
+
+    def _on_safety_lock_expired(self) -> None:
+        self._safety_lock_timer = None
+        if self._safety_lock_until <= 0.0:
+            return
+
+        self._safety_lock_until = 0.0
+        reason = self._safety_lock_reason
+        source = self._safety_lock_source
+        metadata = dict(self._safety_lock_metadata)
+        self._safety_lock_reason = ""
+        self._safety_lock_source = ""
+        self._safety_lock_metadata = {}
+
+        if self.event_callback is None or (not reason and not source):
+            return
+
+        event = {
+            "type": "safety_lock",
+            "state": "cleared",
+            "source": source,
+            "reason": reason,
+            "timestamp": time.time(),
+            "metadata": metadata,
+        }
+        try:
+            self.loop.create_task(self.event_callback(event))
+        except RuntimeError:
+            pass
+
+    @property
+    def safety_locked(self) -> bool:
+        return self._is_safety_lock_active()
 
     async def shutdown(self):
         if self._manual_timer:
             self._manual_timer.cancel()
         if self._joystick_timer:
             self._joystick_timer.cancel()
+        if self._safety_lock_timer:
+            self._safety_lock_timer.cancel()
+            self._safety_lock_timer = None
         await self._queue.put((None, None, None, None))
         if self._worker_task:
             try:
@@ -272,6 +582,33 @@ class CommandDispatcher:
                 break
 
             try:
+                if self._is_safety_lock_active():
+                    bypass = isinstance(payload, dict) and bool(payload.get("_safety_bypass"))
+                    if not bypass:
+                        lock_remaining = max(0.0, self._safety_lock_until - time.monotonic())
+                        command_name = None
+                        if isinstance(payload, dict):
+                            command_name = payload.get("command")
+                        event = {
+                            "type": "command_ack",
+                            "state": "blocked",
+                            "source": source,
+                            "mode": mode,
+                            "command": command_name,
+                            "timestamp": time.time(),
+                            "success": False,
+                            "message": "Command ignored while safety lock active",
+                            "lock_remaining": lock_remaining,
+                            "lock_reason": self._safety_lock_reason,
+                            "lock_source": self._safety_lock_source,
+                            "metadata": dict(self._safety_lock_metadata),
+                        }
+                        if future is not None and not future.done():
+                            future.set_result(event)
+                        if self.event_callback is not None:
+                            await self.event_callback(event)
+                        continue
+
                 if mode == "manual":
                     event = self._handle_manual(source, payload)
                 elif mode == "joystick":
@@ -609,6 +946,216 @@ class AudioProcessor:
         self.session_id = None
 
 # =============================================================================
+# USB MICROPHONE LISTENER
+# =============================================================================
+
+
+class USBMicrophoneListener:
+    """Captures high-energy voice segments from a USB microphone."""
+
+    def __init__(
+        self,
+        *,
+        loop: asyncio.AbstractEventLoop,
+        sample_rate: int,
+        on_segment: Callable[[np.ndarray], None],
+    ) -> None:
+        self.loop = loop
+        self.sample_rate = sample_rate
+        self.on_segment = on_segment
+        self._running = threading.Event()
+        self._queue: queue.Queue = queue.Queue(maxsize=32)
+        self._thread: Optional[threading.Thread] = None
+        self._device = None
+        self._chunk_samples = max(1, int(sample_rate * USB_MIC_CHUNK_SECONDS))
+        self._min_samples = max(1, int(sample_rate * USB_MIC_MIN_COMMAND_SECONDS))
+        self._max_samples = max(self._min_samples + 1, int(sample_rate * USB_MIC_MAX_COMMAND_SECONDS))
+        self._pre_roll_chunks = max(1, int(math.ceil(USB_MIC_PRE_ROLL_SECONDS / USB_MIC_CHUNK_SECONDS)))
+        self._silence_chunks_limit = max(1, int(math.ceil(USB_MIC_SILENCE_TIMEOUT_SECONDS / USB_MIC_CHUNK_SECONDS)))
+        self._max_chunks = max(self._silence_chunks_limit + 1, int(math.ceil(USB_MIC_MAX_COMMAND_SECONDS / USB_MIC_CHUNK_SECONDS)))
+        self._pre_buffer: deque = deque(maxlen=self._pre_roll_chunks)
+        self._segment_chunks: list[np.ndarray] = []
+        self._silence_counter = 0
+        self._capturing = False
+        self._sd = None
+
+        try:
+            import sounddevice as sd  # type: ignore
+
+            self._sd = sd
+        except Exception as exc:
+            print(f"USB microphone disabled: sounddevice import failed ({exc})")
+            self._sd = None
+
+    @property
+    def available(self) -> bool:
+        return self._sd is not None
+
+    def start(self) -> bool:
+        if self._sd is None:
+            return False
+        if self._thread is not None:
+            return True
+
+        self._device = self._select_device()
+        if self._device is None:
+            return False
+
+        self._running.set()
+        self._thread = threading.Thread(target=self._run_stream, name="USBMicrophoneListener", daemon=True)
+        self._thread.start()
+        return True
+
+    def stop(self) -> None:
+        if self._thread is None:
+            return
+        self._running.clear()
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            pass
+        self._thread.join(timeout=2.5)
+        self._thread = None
+        self._queue = queue.Queue(maxsize=32)
+        self._segment_chunks.clear()
+        self._pre_buffer.clear()
+        self._capturing = False
+        self._silence_counter = 0
+
+    def _select_device(self):
+        if self._sd is None:
+            return None
+        try:
+            devices = self._sd.query_devices()
+        except Exception as exc:
+            print(f"USB microphone: failed to enumerate devices ({exc})")
+            return None
+
+        usb_candidates = []
+        fallback = None
+        for idx, info in enumerate(devices):
+            if info.get("max_input_channels", 0) < 1:
+                continue
+            name = str(info.get("name", ""))
+            if "usb" in name.lower():
+                usb_candidates.append((idx, name))
+            if fallback is None:
+                fallback = (idx, name)
+
+        chosen = usb_candidates[0] if usb_candidates else fallback
+        if chosen is None:
+            print("USB microphone: no compatible input device found")
+            return None
+
+        idx, name = chosen
+        print(f"USB microphone bound to device '{name}' (index {idx})")
+        return idx
+
+    def _run_stream(self) -> None:
+        if self._sd is None or self._device is None:
+            return
+
+        try:
+            with self._sd.InputStream(
+                device=self._device,
+                channels=1,
+                samplerate=self.sample_rate,
+                blocksize=self._chunk_samples,
+                dtype="float32",
+                callback=self._audio_callback,
+            ):
+                while self._running.is_set():
+                    try:
+                        chunk = self._queue.get(timeout=0.2)
+                    except queue.Empty:
+                        continue
+
+                    if chunk is None:
+                        break
+
+                    self._process_chunk(chunk)
+        except Exception as exc:
+            print(f"USB microphone stream error: {exc}")
+        finally:
+            self._running.clear()
+            self._finalize_segment()
+
+    def _audio_callback(self, indata, frames, time_info, status):
+        if not self._running.is_set():
+            return
+
+        if status:
+            print(f"USB microphone stream status: {status}")
+
+        data = np.array(indata[:, 0], dtype=np.float32)
+        if not np.isfinite(data).all():
+            data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+
+        try:
+            self._queue.put_nowait(data)
+        except queue.Full:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                pass
+            self._queue.put_nowait(data)
+
+    def _process_chunk(self, chunk: np.ndarray) -> None:
+        if chunk.size == 0:
+            return
+
+        self._pre_buffer.append(chunk)
+        rms = float(np.sqrt(np.mean(chunk**2))) if chunk.size else 0.0
+        if not np.isfinite(rms):
+            rms = 0.0
+
+        start_now = False
+        if not self._capturing and rms >= USB_MIC_START_RMS:
+            self._capturing = True
+            start_now = True
+            self._segment_chunks = list(self._pre_buffer)
+            self._pre_buffer.clear()
+            self._silence_counter = 0
+
+        if self._capturing:
+            if not start_now:
+                self._segment_chunks.append(chunk)
+
+            if rms < USB_MIC_STOP_RMS:
+                self._silence_counter += 1
+            else:
+                self._silence_counter = 0
+
+            if (
+                self._silence_counter >= self._silence_chunks_limit
+                or len(self._segment_chunks) >= self._max_chunks
+            ):
+                self._finalize_segment()
+
+    def _finalize_segment(self) -> None:
+        if not self._segment_chunks:
+            self._capturing = False
+            self._silence_counter = 0
+            self._pre_buffer.clear()
+            return
+
+        segment = np.concatenate(self._segment_chunks, axis=0)
+        self._segment_chunks = []
+        self._capturing = False
+        self._silence_counter = 0
+        self._pre_buffer.clear()
+
+        if segment.size < self._min_samples:
+            return
+        if segment.size > self._max_samples:
+            segment = segment[: self._max_samples]
+
+        energy = float(np.sqrt(np.mean(segment**2))) if segment.size else 0.0
+        if not np.isfinite(energy) or energy < USB_MIC_MIN_RMS:
+            return
+
+        self.loop.call_soon_threadsafe(self.on_segment, segment.astype(np.float32))
+
 # WEBSOCKET SERVER
 # =============================================================================
 
@@ -629,6 +1176,11 @@ class WheelchairWebSocketServer:
         self.bluetooth_controller: Optional[BluetoothController] = None
         self.camera_clients = {}
         self._last_command_signature = {}
+        self.usb_mic_listener: Optional[USBMicrophoneListener] = None
+        self._usb_queue: Optional[asyncio.Queue] = None
+        self._usb_task: Optional[asyncio.Task] = None
+        self._usb_processing_lock = asyncio.Lock()
+        self.ultrasonic_monitor: Optional[UltrasonicMonitor] = None
 
     async def _broadcast_event(self, event: dict):
         if not event:
@@ -679,6 +1231,288 @@ class WheelchairWebSocketServer:
             for ws in disconnected:
                 self.connected_clients.discard(ws)
                 self.camera_clients.pop(ws, None)
+
+    def _handle_usb_segment(self, segment: Optional[np.ndarray]) -> None:
+        if segment is None or not isinstance(segment, np.ndarray):
+            return
+        if segment.size == 0 or self._usb_queue is None:
+            return
+        if self._usb_processing_lock.locked() and self._usb_queue.full():
+            return
+        if self._usb_queue.full():
+            try:
+                self._usb_queue.get_nowait()
+                self._usb_queue.task_done()
+            except asyncio.QueueEmpty:
+                pass
+        try:
+            self._usb_queue.put_nowait(segment)
+        except asyncio.QueueFull:
+            pass
+
+    def _setup_usb_microphone(self, loop: asyncio.AbstractEventLoop) -> None:
+        if self.usb_mic_listener is not None:
+            return
+        self._usb_queue = asyncio.Queue(maxsize=USB_MIC_QUEUE_SIZE)
+        listener = USBMicrophoneListener(loop=loop, sample_rate=SAMPLE_RATE, on_segment=self._handle_usb_segment)
+        if not listener.available:
+            print("USB microphone listener unavailable (sounddevice not installed).")
+            self._usb_queue = None
+            return
+        if not listener.start():
+            print("✗ Failed to start USB microphone listener")
+            self._usb_queue = None
+            return
+        self.usb_mic_listener = listener
+        print("✓ USB microphone listener active; monitoring background audio")
+        self._usb_task = loop.create_task(self._usb_mic_consumer())
+
+    def _setup_ultrasonic_monitor(self, loop: asyncio.AbstractEventLoop) -> None:
+        if self.ultrasonic_monitor is not None:
+            return
+        if not ULTRASONIC_SAFETY_AVAILABLE:
+            print("Ultrasonic safety disabled in configuration")
+            return
+        if not GPIO_AVAILABLE:
+            print("Ultrasonic safety disabled: GPIO library unavailable")
+            return
+        try:
+            monitor = UltrasonicMonitor(
+                loop=loop,
+                sensors=ULTRASONIC_SENSORS,
+                stop_distance_cm=ULTRASONIC_STOP_DISTANCE_CM,
+                reset_distance_cm=ULTRASONIC_RESET_DISTANCE_CM,
+                poll_interval=ULTRASONIC_POLL_INTERVAL,
+                on_obstacle=self._handle_ultrasonic_obstacle,
+            )
+        except Exception as exc:
+            print(f"Failed to configure ultrasonic monitor: {exc}")
+            return
+
+        if monitor.start():
+            self.ultrasonic_monitor = monitor
+        else:
+            print("Ultrasonic monitor failed to start")
+
+    async def _handle_ultrasonic_obstacle(self, sensor: str, distance_cm: float) -> None:
+        if self.dispatcher is None:
+            return
+
+        sensor_label = sensor or "unknown"
+        print(
+            f"Ultrasonic obstacle detected by {sensor_label} at {distance_cm:.1f} cm; issuing safety stop"
+        )
+
+        await self.dispatcher.emergency_stop(
+            source="ultrasonic",
+            reason="obstacle_detected",
+            bypass_lock=True,
+        )
+
+        await self.dispatcher.activate_safety_lock(
+            duration=ULTRASONIC_LOCK_DURATION,
+            reason="obstacle_detected",
+            source="ultrasonic",
+            metadata={
+                "sensor": sensor_label,
+                "distance_cm": distance_cm,
+                "threshold_cm": ULTRASONIC_STOP_DISTANCE_CM,
+            },
+        )
+
+        latest = self.ultrasonic_monitor.latest_distances if self.ultrasonic_monitor else None
+
+        alert_event = {
+            "type": "sensor_alert",
+            "sensor": "ultrasonic",
+            "state": "triggered",
+            "sensor_name": sensor_label,
+            "distance_cm": distance_cm,
+            "threshold_cm": ULTRASONIC_STOP_DISTANCE_CM,
+            "timestamp": time.time(),
+            "readings": latest,
+        }
+        await self._broadcast_event(alert_event)
+
+    async def _usb_mic_consumer(self) -> None:
+        if self._usb_queue is None:
+            return
+        try:
+            while True:
+                segment = await self._usb_queue.get()
+                try:
+                    if segment is None:
+                        continue
+                    await self._process_usb_segment(segment)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    print(f"USB microphone pipeline error: {exc}")
+                finally:
+                    self._usb_queue.task_done()
+        except asyncio.CancelledError:
+            pass
+
+    async def _process_usb_segment(self, segment: np.ndarray) -> None:
+        if segment.size == 0:
+            return
+
+        async with self._usb_processing_lock:
+            audio = np.nan_to_num(segment.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+
+            blend = float(max(0.0, min(1.0, USB_MIC_NOISE_REDUCTION_BLEND)))
+            if blend > 0.0:
+                try:
+                    audio = apply_subtle_noise_reduction(audio, SAMPLE_RATE, blend)
+                except Exception as exc:
+                    print(f"USB microphone noise reduction warning: {exc}")
+
+            trimmed = trim_audio_to_speech(audio, SAMPLE_RATE, threshold_ratio=0.25)
+            if trimmed is not None and trimmed.size:
+                audio = trimmed
+
+            try:
+                gated = fast_noise_gate(audio, SAMPLE_RATE, floor_percentile=6.0, gate_strength=1.2)
+                if gated is not None and gated.size:
+                    audio = gated
+            except Exception as exc:
+                print(f"USB microphone noise gate warning: {exc}")
+
+            audio = ensure_minimum_duration(audio, SAMPLE_RATE, target_seconds=USB_MIC_MIN_COMMAND_SECONDS)
+
+            max_samples = int(SAMPLE_RATE * USB_MIC_MAX_COMMAND_SECONDS)
+            if audio.size > max_samples:
+                audio = audio[:max_samples]
+
+            peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+            if not np.isfinite(peak) or peak <= 0.0:
+                return
+            audio = np.clip(audio / peak, -1.0, 1.0).astype(np.float32)
+
+            rms = float(np.sqrt(np.mean(audio**2))) if audio.size else 0.0
+            if not np.isfinite(rms) or rms < USB_MIC_MIN_RMS:
+                return
+
+            if audio.size < int(SAMPLE_RATE * USB_MIC_MIN_COMMAND_SECONDS * 0.6):
+                return
+
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            temp_path = TEMP_DIR / f"usb_cmd_{timestamp}_{uuid.uuid4().hex[:8]}.wav"
+
+            wav.write(str(temp_path), SAMPLE_RATE, (audio * 32767).astype(np.int16))
+
+            command = None
+            confidence = 0.0
+            transcription = ""
+            try:
+                command, confidence, transcription = process_command_with_whisper_tiny(
+                    audio_path=str(temp_path),
+                    detect_lang=True,
+                    fast_mode=True,
+                    noise_reduction_blend=USB_MIC_NOISE_REDUCTION_BLEND,
+                )
+            except Exception as exc:
+                print(f"USB microphone transcription error: {exc}")
+                await self._broadcast_event({
+                    "type": "usb_mic_command",
+                    "status": "error",
+                    "confidence": float(confidence),
+                    "transcription": transcription,
+                    "timestamp": time.time(),
+                    "message": str(exc),
+                })
+                with contextlib.suppress(FileNotFoundError):
+                    temp_path.unlink()
+                return
+
+            transcription = transcription or ""
+
+            try:
+                if not command or confidence < COMMAND_CONFIDENCE_THRESHOLD:
+                    print(
+                        "USB microphone ignored low-confidence command: "
+                        f"{confidence:.2f} (threshold {COMMAND_CONFIDENCE_THRESHOLD:.2f})"
+                    )
+                    await self._broadcast_event({
+                        "type": "usb_mic_command",
+                        "status": "ignored",
+                        "confidence": float(confidence),
+                        "command": command,
+                        "transcription": transcription,
+                        "timestamp": time.time(),
+                    })
+                    return
+                speaker_name = None
+                speaker_score = 1.0
+                speaker_verified = True
+
+                if SPEAKER_VERIFICATION_ENABLED:
+                    try:
+                        speaker_name, speaker_score, speaker_verified = await self.identify_speaker_from_audio(temp_path)
+                    except Exception as exc:
+                        print(f"USB microphone speaker verification failed: {exc}")
+                        speaker_verified = False
+
+                    if not speaker_verified:
+                        print(
+                            "USB microphone command blocked: speaker verification below "
+                            f"{SIMILARITY_THRESHOLD:.2f}"
+                        )
+                        await self._broadcast_event({
+                            "type": "usb_mic_command",
+                            "status": "blocked",
+                            "command": command,
+                            "confidence": float(confidence),
+                            "transcription": transcription,
+                            "timestamp": time.time(),
+                            "speaker": {
+                                "name": speaker_name,
+                                "score": float(speaker_score),
+                                "verified": False,
+                                "required_threshold": float(SIMILARITY_THRESHOLD),
+                            },
+                        })
+                        return
+
+                print(
+                    f"USB microphone recognized command '{command}' "
+                    f"(confidence {confidence:.2f})"
+                )
+
+                payload = {
+                    "command": command,
+                    "confidence": float(confidence),
+                    "transcription": transcription,
+                    "speaker": speaker_name,
+                }
+
+                if self.dispatcher is not None:
+                    await self.dispatcher.submit_command(
+                        source="usb_mic",
+                        mode="manual",
+                        payload=payload,
+                    )
+
+                speaker_payload = {
+                    "name": speaker_name,
+                    "score": float(speaker_score),
+                    "verified": bool(speaker_verified),
+                }
+                if not SPEAKER_VERIFICATION_ENABLED:
+                    speaker_payload["verification"] = "disabled"
+
+                await self._broadcast_event({
+                    "type": "usb_mic_command",
+                    "status": "accepted",
+                    "command": command,
+                    "confidence": float(confidence),
+                    "transcription": transcription,
+                    "timestamp": time.time(),
+                    "speaker": speaker_payload,
+                })
+            finally:
+                with contextlib.suppress(FileNotFoundError):
+                    temp_path.unlink()
 
     def _warm_stt_pipeline(self):
         """Warm Whisper tiny pipeline so the first command is instant."""
@@ -1295,8 +2129,12 @@ class WheelchairWebSocketServer:
             if transcription:
                 print(f"Transcription: {transcription}")
 
-            if command:
-                print(f"\n✓ Command recognized: '{command}' (confidence: {confidence:.2f})")
+            recognized = bool(command) and confidence >= COMMAND_CONFIDENCE_THRESHOLD
+
+            if recognized:
+                print(
+                    f"\n✓ Command recognized: '{command}' (confidence: {confidence:.2f})"
+                )
 
                 if SPEAKER_VERIFICATION_ENABLED and not speaker_verified:
                     print(
@@ -1366,7 +2204,17 @@ class WheelchairWebSocketServer:
                 }))
 
             else:
-                print(f"\n✗ Command not recognized (confidence: {confidence:.2f})")
+                if command and confidence < COMMAND_CONFIDENCE_THRESHOLD:
+                    print(
+                        "\n✗ Command confidence too low: "
+                        f"{confidence:.2f} < {COMMAND_CONFIDENCE_THRESHOLD:.2f}"
+                    )
+                    failure_message = (
+                        "Heard something but confidence was too low. Please repeat clearly."
+                    )
+                else:
+                    print(f"\n✗ Command not recognized (confidence: {confidence:.2f})")
+                    failure_message = "Could not recognize the command. Please try again."
                 if SPEAKER_VERIFICATION_ENABLED:
                     print(
                         "Speaker match during failure: "
@@ -1385,7 +2233,7 @@ class WheelchairWebSocketServer:
                     "type": "command_not_recognized",
                     "transcription": transcription,
                     "confidence": float(confidence),
-                    "message": "Could not recognize the command. Please try again.",
+                    "message": failure_message,
                     "speaker": failure_speaker_payload,
                 }))
         
@@ -1605,15 +2453,34 @@ class WheelchairWebSocketServer:
         print("=" * 50 + "\n")
     
     async def shutdown(self):
+        if self.ultrasonic_monitor is not None:
+            await self.ultrasonic_monitor.stop()
+            self.ultrasonic_monitor = None
+
         if self.dispatcher is not None:
             await self.dispatcher.shutdown()
             self.dispatcher = None
+
+        if self._usb_task is not None:
+            self._usb_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._usb_task
+            self._usb_task = None
+
+        if self.usb_mic_listener is not None:
+            await asyncio.to_thread(self.usb_mic_listener.stop)
+            self.usb_mic_listener = None
+
+        self._usb_queue = None
 
     def cleanup(self):
         """Cleanup resources."""
         if self.bluetooth_controller is not None:
             self.bluetooth_controller.stop()
             self.bluetooth_controller = None
+        if self.usb_mic_listener is not None:
+            self.usb_mic_listener.stop()
+            self.usb_mic_listener = None
         self.motor_controller.cleanup()
     
     async def start(self):
@@ -1635,6 +2502,9 @@ class WheelchairWebSocketServer:
             joystick_stop_confirmation=JOYSTICK_STOP_CONFIRMATION,
             joystick_stop_burst=JOYSTICK_STOP_BURST_COUNT,
         )
+
+        self._setup_usb_microphone(loop)
+        self._setup_ultrasonic_monitor(loop)
 
         if BT_ENABLED:
             if not BLUETOOTH_AVAILABLE:

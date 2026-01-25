@@ -695,9 +695,14 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
     return Scaffold(
       appBar: AppBar(
         title: Row(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisSize: MainAxisSize.max,
           children: [
-            Text(tr(context, 'voice_control')),
+            Flexible(
+              child: Text(
+                tr(context, 'voice_control'),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
             const SizedBox(width: 8),
             Tooltip(
               message: !_isWifiAvailable
@@ -796,10 +801,12 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
                         color: _voiceProfileExists ? Colors.blue : Colors.red,
                       ),
                       const SizedBox(width: 12),
-                      Text(
-                        'Voice Profile Status',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.bold),
+                      Expanded(
+                        child: Text(
+                          'Voice Profile Status',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.bold),
+                        ),
                       ),
                     ],
                   ),

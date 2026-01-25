@@ -11,6 +11,35 @@
       "motor_left_in2": 27,
       "motor_right_in1": 22,
       "motor_right_in2": 23
+    },
+    "sensors": {
+      "dht11": {
+        "data_gpio": 4,
+        "physical_pin": 7
+      },
+      "neo6m_gps": {
+        "uart_port": "/dev/serial0",
+        "tx_gpio": 14,
+        "rx_gpio": 15,
+        "baudrate": 9600
+      },
+      "max30100": {
+        "sda_gpio": 2,
+        "scl_gpio": 3,
+        "i2c_bus": 1
+      }
+    },
+    "ultrasonic": {
+      "enabled": true,
+      "sensors": {
+        "front": { "trigger_pin": 5, "echo_pin": 6 },
+        "left": { "trigger_pin": 19, "echo_pin": 13 },
+        "right": { "trigger_pin": 26, "echo_pin": 21 }
+      },
+      "stop_distance_cm": 30.0,
+      "lock_duration_seconds": 5.0,
+      "poll_interval_seconds": 0.1,
+      "reset_margin_cm": 5.0
     }
   },
   "bluetooth": {

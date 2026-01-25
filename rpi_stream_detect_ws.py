@@ -29,7 +29,16 @@ import time
 from contextlib import suppress
 
 import cv2
+import numpy as np
 import websockets
+
+try:
+    from turbojpeg import TJPF_RGB, TurboJPEG  # type: ignore
+
+    TURBO_JPEG = TurboJPEG()
+except Exception:  # pragma: no cover - optional dependency
+    TURBO_JPEG = None
+    TJPF_RGB = None  # type: ignore
 
 LOG = logging.getLogger("rpi_camera_stream")
 
@@ -239,13 +248,13 @@ class CameraCapture(threading.Thread):
                     continue
                 if arr.ndim == 3:
                     if arr.shape[2] == 3:
-                        frame = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                        frame = np.ascontiguousarray(arr)
                     elif arr.shape[2] == 4:
-                        frame = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+                        frame = cv2.cvtColor(arr, cv2.COLOR_RGBA2RGB)
                     else:
-                        frame = arr
+                        frame = np.ascontiguousarray(arr)
                 else:
-                    frame = arr
+                    frame = cv2.cvtColor(arr, cv2.COLOR_GRAY2RGB)
             elif self.use_picamera_legacy and self._legacy_stream is not None:
                 try:
                     stream = next(self._legacy_stream)
@@ -273,7 +282,8 @@ class CameraCapture(threading.Thread):
                             pass
                         self.picamera = None
                     continue
-                frame = stream.array
+                frame = cv2.cvtColor(stream.array, cv2.COLOR_BGR2RGB)
+                frame = np.ascontiguousarray(frame)
                 stream.truncate(0)
                 stream.seek(0)
             else:
@@ -297,7 +307,11 @@ class CameraCapture(threading.Thread):
                     time.sleep(0.1)
                     continue
                 self._failure_count = 0
-                frame = grabbed
+                frame = cv2.cvtColor(grabbed, cv2.COLOR_BGR2RGB)
+                frame = np.ascontiguousarray(frame)
+
+            if frame is not None and hasattr(frame, "flags") and not frame.flags["C_CONTIGUOUS"]:
+                frame = np.ascontiguousarray(frame)
 
             with self.lock:
                 self.frame = frame
@@ -337,8 +351,31 @@ class CameraCapture(threading.Thread):
 
 
 def encode_jpeg(frame, quality: int) -> bytes:
+    if frame is None:
+        raise ValueError("encode_jpeg received empty frame")
     quality = int(max(1, min(100, quality)))
-    ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+
+    if frame.ndim == 2:
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+    elif frame.ndim == 3 and frame.shape[2] == 4:
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
+    else:
+        frame_rgb = frame
+
+    frame_rgb = np.ascontiguousarray(frame_rgb)
+
+    if TURBO_JPEG is not None:
+        try:
+            return TURBO_JPEG.encode(frame_rgb, quality=quality, pixel_format=TJPF_RGB)
+        except Exception as exc:  # pragma: no cover - optional dependency
+            LOG.debug("TurboJPEG encode failed, using OpenCV fallback: %s", exc)
+
+    frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+    ok, buffer = cv2.imencode(
+        ".jpg",
+        frame_bgr,
+        [int(cv2.IMWRITE_JPEG_QUALITY), quality],
+    )
     if not ok:
         raise RuntimeError("JPEG encoding failed")
     return buffer.tobytes()
@@ -378,6 +415,7 @@ async def stream_frames(args: argparse.Namespace, capture: CameraCapture) -> Non
                     "stream": args.stream_name,
                     "width": args.width,
                     "height": args.height,
+                    "color_space": "RGB",
                 }
                 await ws.send(json.dumps(register_payload))
 
@@ -395,6 +433,7 @@ async def stream_frames(args: argparse.Namespace, capture: CameraCapture) -> Non
                             "type": "camera_frame",
                             "stream": args.stream_name,
                             "format": "jpeg",
+                            "color_space": "RGB",
                             "timestamp": time.time(),
                             "data": frame_b64,
                         }

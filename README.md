@@ -199,6 +199,71 @@ The voice authentication system uses a combination of:
 - **Similarity scoring** - Compares live voice to stored profiles
 - **Adaptive thresholding** - Adjusts recognition strictness based on environment
 
+---
+
+## 🔗 Bluetooth Control Pipeline
+
+The Raspberry Pi can now accept wheelchair commands from both the WebSocket
+voice channel and a dedicated Bluetooth RFCOMM transport. The mobile app keeps a
+continuous Bluetooth link for manual buttons and joystick streaming, while
+WebSocket remains available for voice authentication and LLM features.
+
+### Raspberry Pi Setup
+
+1. Install system dependencies (run on the Pi):
+   ```bash
+   sudo apt update
+   sudo apt install -y bluetooth bluez python3-bluez
+   ```
+2. Install Python requirements (inside the project venv if used):
+   ```bash
+   pip install -r requirements_rpi.txt
+   ```
+3. Enable the RFCOMM profile and agent:
+   ```bash
+   sudo systemctl enable bluetooth
+   sudo systemctl start bluetooth
+   sudo bluetoothctl agent NoInputNoOutput
+   sudo bluetoothctl default-agent
+   ```
+4. Pair the Android device once (from either side):
+   ```bash
+   sudo bluetoothctl pair AA:BB:CC:DD:EE:FF
+   sudo bluetoothctl trust AA:BB:CC:DD:EE:FF
+   ```
+5. Launch the wheelchair server:
+   ```bash
+   python3 rpi_websocket_server.py
+   ```
+   The server starts both the WebSocket listener and the Bluetooth dispatcher
+   (`bluetooth_controller.py`). Manual and joystick commands are funneled through
+   a single-threaded command queue, so voice and Bluetooth never fight over GPIO.
+
+### Android App Setup
+
+1. From `smart_wheelchair_app/`, fetch dependencies:
+   ```bash
+   flutter pub get
+   ```
+2. Build or run the app:
+   ```bash
+   flutter run
+   ```
+3. Pair the phone with the Raspberry Pi in Android system settings. The app
+   remembers the last paired device and reconnects automatically on launch.
+4. Open **Settings ▸ Bluetooth Control** in the app to confirm connection status
+   or manually switch devices. Manual buttons and joystick now send commands over
+   Bluetooth at ~20 Hz, while voice enrollment and command recognition continue
+   to use the WebSocket pipeline when Wi-Fi is available.
+
+### Safety Guarantees
+
+- Every control source ultimately flows through `CommandDispatcher`, enforcing
+  sticky manual commands, 200 ms joystick timeouts, and a shared emergency stop.
+- Bluetooth disconnects trigger an automatic stop.
+- All acknowledgements include the originating channel (`source`), making log
+  analysis straightforward.
+
 ### 📡 Command Recognition Pipeline
 
 1. **Audio Capture**: High-quality audio recording with noise reduction

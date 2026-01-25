@@ -41,3 +41,6 @@ torch>=2.0.0
 torchaudio>=2.0.0
 transformers>=4.28.0
 transformers>=4.28.0,<4.30.0  # Version cap for better Pi compatibility
+
+# Bluetooth transport
+pybluez>=0.30
