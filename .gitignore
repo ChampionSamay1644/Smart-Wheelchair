@@ -23,3 +23,6 @@ logs/
 /voice_db_processed
 /temp
 /voice_db_backup
+/wheelchair-api/.next
+/wheelchair-api/node_modules
+smart-wheelchair-44-firebase-adminsdk-fbsvc-bb6b1af07e.json
