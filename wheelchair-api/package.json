@@ -1,0 +1,29 @@
+{
+  "name": "wheelchair-api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "simulate": "python3 simulator.py --url http://localhost:3000",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
+    "firebase": "^12.8.0",
+    "firebase-admin": "^13.6.0",
+    "next": "16.1.5",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.18",
+    "@types/node": "^25.0.10",
+    "@types/react": "^19.2.10",
+    "@types/react-dom": "^19.2.3",
+    "postcss": "^8",
+    "tailwindcss": "^4.1.18",
+    "typescript": "^5"
+  }
+}

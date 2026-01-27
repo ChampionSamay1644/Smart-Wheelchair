@@ -8,7 +8,8 @@ plugins {
 android {
     namespace = "com.example.smart_wheelchair_app"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    // Set NDK to the highest required by plugins (geolocator_android, package_info_plus, path_provider_android)
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11

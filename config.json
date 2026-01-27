@@ -1,0 +1,62 @@
+{
+  "raspberry_pi": {
+    "base_path": "/home/pi/Code",
+    "ip_address": "192.168.0.103",
+    "websocket_port": 8765,
+    "command_timeout_seconds": 1.5,
+    "joystick_timeout_seconds": 0.2,
+    "joystick_dead_zone": 0.2,
+    "gpio_pins": {
+      "motor_left_in1": 17,
+      "motor_left_in2": 27,
+      "motor_right_in1": 22,
+      "motor_right_in2": 23
+    },
+    "sensors": {
+      "dht11": {
+        "data_gpio": 4,
+        "physical_pin": 7
+      },
+      "neo6m_gps": {
+        "uart_port": "/dev/serial0",
+        "tx_gpio": 14,
+        "rx_gpio": 15,
+        "baudrate": 9600
+      },
+      "max30100": {
+        "sda_gpio": 2,
+        "scl_gpio": 3,
+        "i2c_bus": 1
+      }
+    },
+    "ultrasonic": {
+      "enabled": true,
+      "sensors": {
+        "front": { "trigger_pin": 5, "echo_pin": 6 },
+        "left": { "trigger_pin": 19, "echo_pin": 13 },
+        "right": { "trigger_pin": 26, "echo_pin": 21 }
+      },
+      "stop_distance_cm": 30.0,
+      "lock_duration_seconds": 5.0,
+      "poll_interval_seconds": 0.1,
+      "reset_margin_cm": 5.0
+    }
+  },
+  "bluetooth": {
+    "enabled": true,
+    "transport": "rfcomm",
+    "device_name": "SmartWheelchair",
+    "channel": 3,
+    "service_uuid": "94f39d29-7d6d-437d-973b-fba39e49d4ee"
+  },
+  "android_app": {
+    "websocket_url": "ws://192.168.1.100:8765",
+    "recording_sample_rate": 16000,
+    "chunk_duration_ms": 100
+  },
+  "voice_processing": {
+    "sample_rate": 16000,
+    "record_duration": 5,
+    "similarity_threshold": 0.60
+  }
+}
