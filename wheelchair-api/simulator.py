@@ -260,8 +260,8 @@ def main():
     )
     parser.add_argument(
         '--url',
-        default='http://localhost:3000',
-        help='API base URL (default: http://localhost:3000)'
+        default='https://smartwheelchair.vercel.app',
+        help='API base URL (default: https://smartwheelchair.vercel.app)'
     )
     parser.add_argument(
         '--device-id',
