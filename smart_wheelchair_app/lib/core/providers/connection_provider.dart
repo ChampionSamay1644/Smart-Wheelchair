@@ -94,6 +94,10 @@ class ConnectionProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void sendMessage(Map<String, dynamic> message) {
+    _wsService.sendMessage(message);
+  }
+
   void _subscribeToMessages() {
     _messageSubscription?.cancel();
     _messageSubscription = _wsService.messageStream.listen(

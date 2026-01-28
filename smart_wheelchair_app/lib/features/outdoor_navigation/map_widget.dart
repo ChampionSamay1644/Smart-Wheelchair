@@ -6,12 +6,14 @@ class MapWidget extends StatefulWidget {
   final LatLng currentPosition;
   final List<LatLng> routePoints;
   final LatLng? destination;
+  final Function(LatLng)? onTap;
 
   const MapWidget({
     super.key,
     required this.currentPosition,
     required this.routePoints,
     this.destination,
+    this.onTap,
   });
 
   @override
@@ -42,6 +44,11 @@ class _MapWidgetState extends State<MapWidget> {
         onPositionChanged: (pos, hasGesture) {
           // keep local zoom in sync
           _zoom = pos.zoom;
+        },
+        onTap: (tapPosition, point) {
+          if (widget.onTap != null) {
+            widget.onTap!(point);
+          }
         },
       ),
       children: [

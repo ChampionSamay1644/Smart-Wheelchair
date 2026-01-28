@@ -6,10 +6,12 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:http/http.dart' as http;
 
+import '../../core/providers/outdoor_navigation_provider.dart';
 import 'map_widget.dart';
 import 'search_bar_widget.dart';
 import 'navigation_controls_widget.dart';
@@ -22,20 +24,15 @@ class OutdoorNavigationPage extends StatefulWidget {
 }
 
 class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
-  LatLng? _currentPosition;
-  LatLng? _destination;
-  List<LatLng> _routePoints = [];
-
-  bool _isNavigating = false;
   StreamSubscription<Position>? _positionSub;
-  bool _isPaused = false;
-
   final LatLng _fallbackPosition = LatLng(28.7041, 77.1025);
 
   @override
   void initState() {
     super.initState();
-    _initLocation();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initLocation();
+    });
   }
 
   @override
@@ -45,6 +42,7 @@ class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
   }
 
   Future<void> _initLocation() async {
+    final navProvider = context.read<OutdoorNavigationProvider>();
     try {
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
@@ -53,200 +51,222 @@ class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
 
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
-        setState(() {
-          _currentPosition = _fallbackPosition;
-        });
+        navProvider.updatePosition(_fallbackPosition);
         return;
       }
 
-      // Use LocationSettings (replacement for desiredAccuracy in newer geolocator)
       final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.best,
-        ),
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.best),
       );
       if (!mounted) return;
-      setState(() {
-        _currentPosition = LatLng(pos.latitude, pos.longitude);
-      });
+      navProvider.updatePosition(LatLng(pos.latitude, pos.longitude));
     } catch (e) {
-      print('Failed to get location: $e');
-      setState(() => _currentPosition = _fallbackPosition);
-    }
-  }
-
-  Future<void> _onSearch(String query) async {
-    if (query.trim().isEmpty) return;
-    final uri = Uri.parse(
-      'https://nominatim.openstreetmap.org/search',
-    ).replace(queryParameters: {'q': query, 'format': 'json', 'limit': '1'});
-
-    try {
-      final res = await http.get(
-        uri,
-        headers: {'User-Agent': 'SmartWheelchair/1.0'},
-      );
-      if (res.statusCode == 200) {
-        final List data = jsonDecode(res.body);
-        if (data.isNotEmpty) {
-          final item = data.first;
-          final lat = double.parse(item['lat']);
-          final lon = double.parse(item['lon']);
-          setState(() {
-            _destination = LatLng(lat, lon);
-          });
-          await _fetchRoute();
-        } else {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No results from geocoding')),
-          );
-        }
-      } else {
-        if (!mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Geocoding failed')));
-      }
-    } catch (e) {
-      print('Geocoding error: $e');
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Geocoding error')));
-    }
-  }
-
-  Future<void> _fetchRoute() async {
-    if (_currentPosition == null || _destination == null) return;
-
-    final from = '${_currentPosition!.longitude},${_currentPosition!.latitude}';
-    final to = '${_destination!.longitude},${_destination!.latitude}';
-    final uri = Uri.parse(
-      'https://router.project-osrm.org/route/v1/driving/$from;$to',
-    ).replace(queryParameters: {'overview': 'full', 'geometries': 'geojson'});
-
-    try {
-      final res = await http.get(uri);
-      if (res.statusCode == 200) {
-        final Map data = jsonDecode(res.body);
-        if (data['routes'] != null && (data['routes'] as List).isNotEmpty) {
-          final coords = data['routes'][0]['geometry']['coordinates'] as List;
-          final pts = coords.map<LatLng>((c) {
-            final lon = (c[0] as num).toDouble();
-            final lat = (c[1] as num).toDouble();
-            return LatLng(lat, lon);
-          }).toList();
-          setState(() => _routePoints = pts);
-        } else {
-          if (!mounted) return;
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('No route found')));
-        }
-      } else {
-        print('Routing failed: ${res.statusCode} ${res.body}');
-        if (!mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Routing service error')));
-      }
-    } catch (e) {
-      print('Routing error: $e');
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Routing error')));
+      debugPrint('Failed to get location: $e');
+      navProvider.updatePosition(_fallbackPosition);
     }
   }
 
   void _startNavigation() async {
-    // start real GPS tracking via a position stream
+    final navProvider = context.read<OutdoorNavigationProvider>();
     try {
       LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
+      if (permission != LocationPermission.always && permission != LocationPermission.whileInUse) {
         permission = await Geolocator.requestPermission();
       }
 
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
+      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Location permission required')),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Permission denied')));
         return;
       }
 
       _positionSub?.cancel();
-      _positionSub =
-          Geolocator.getPositionStream(
-            locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.best,
-              distanceFilter: 5,
-            ),
-          ).listen((pos) {
-            if (!mounted) return;
-            setState(() {
-              _currentPosition = LatLng(pos.latitude, pos.longitude);
-            });
-          });
-
-      setState(() {
-        _isNavigating = true;
-        _isPaused = false;
+      _positionSub = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.best, distanceFilter: 5),
+      ).listen((pos) {
+        if (!mounted) return;
+        navProvider.updatePosition(LatLng(pos.latitude, pos.longitude));
       });
+
+      navProvider.setNavigating(true);
+      navProvider.setPaused(false);
     } catch (e) {
-      print('Failed to start navigation: $e');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to start navigation')),
-      );
+      debugPrint('Failed to start navigation: $e');
     }
   }
 
   void _stopNavigation() {
+    final navProvider = context.read<OutdoorNavigationProvider>();
     _positionSub?.cancel();
     _positionSub = null;
-    setState(() {
-      _isNavigating = false;
-      _isPaused = false;
-    });
+    navProvider.setNavigating(false);
+    navProvider.setPaused(false);
   }
 
   void _togglePause() {
+    final navProvider = context.read<OutdoorNavigationProvider>();
     if (_positionSub == null) return;
-    if (_isPaused) {
+    if (navProvider.state.isPaused) {
       _positionSub!.resume();
     } else {
       _positionSub!.pause();
     }
-    setState(() => _isPaused = !_isPaused);
+    navProvider.setPaused(!navProvider.state.isPaused);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Outdoor Navigation')),
-      body: Column(
-        children: [
-          SearchBarWidget(onSearch: _onSearch),
-          Expanded(
-            child: MapWidget(
-              currentPosition: _currentPosition ?? _fallbackPosition,
-              routePoints: _routePoints,
-              destination: _destination,
-            ),
-          ),
-          NavigationControlsWidget(
-            isNavigating: _isNavigating,
-            isPaused: _isPaused,
-            onStart: _startNavigation,
-            onStop: _stopNavigation,
-            onTogglePause: _togglePause,
-          ),
-          const SizedBox(height: 8),
-        ],
+      body: Consumer<OutdoorNavigationProvider>(
+        builder: (context, nav, _) {
+          final state = nav.state;
+          return Column(
+            children: [
+              SearchBarWidget(
+                onSearch: nav.searchLocation,
+                isSearching: state.isSearching,
+              ),
+              Expanded(
+                child: Stack(
+                  children: [
+                    MapWidget(
+                      currentPosition: state.currentPosition ?? _fallbackPosition,
+                      routePoints: state.routePoints,
+                      destination: state.destination,
+                      onTap: (point) async {
+                        nav.setDestination(point);
+                        await nav.fetchRoute();
+                      },
+                    ),
+                    if (state.searchResults.isNotEmpty)
+                      Positioned(
+                        top: 0,
+                        left: 10,
+                        right: 10,
+                        child: Material(
+                          elevation: 4,
+                          borderRadius: BorderRadius.circular(10),
+                          child: Container(
+                            constraints: const BoxConstraints(maxHeight: 250),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: ListView.separated(
+                              shrinkWrap: true,
+                              itemCount: state.searchResults.length,
+                              separatorBuilder: (context, index) => const Divider(height: 1),
+                              itemBuilder: (context, index) {
+                                final item = state.searchResults[index];
+                                return ListTile(
+                                  leading: const Icon(Icons.location_on_outlined, color: Colors.blue),
+                                  title: Text(item['display_name'] ?? 'Unknown location'),
+                                  onTap: () => nav.selectSearchResult(item),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (!state.isSearching && state.searchResults.isEmpty && context.watch<OutdoorNavigationProvider>().lastQueryNotEmpty)
+                      Positioned(
+                        top: 0,
+                        left: 10,
+                        right: 10,
+                        child: Material(
+                          elevation: 2,
+                          borderRadius: BorderRadius.circular(10),
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Row(
+                              children: [
+                                Icon(Icons.search_off, color: Colors.grey),
+                                SizedBox(width: 10),
+                                Text('No results found. Try a different search.', style: TextStyle(color: Colors.grey)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (state.destinationAddress != null)
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.05),
+                        blurRadius: 10,
+                        offset: const Offset(0, -5),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.location_on, color: Colors.red, size: 24),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              state.destinationAddress!,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        children: [
+                          _buildMetric(Icons.straighten, '${state.distance?.toStringAsFixed(2) ?? "0"} km', 'Distance'),
+                          _buildMetric(Icons.timer, '${state.estimatedTime?.toStringAsFixed(0) ?? "0"} min', 'ETA'),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              NavigationControlsWidget(
+                isNavigating: state.isNavigating,
+                isPaused: state.isPaused,
+                onStart: _startNavigation,
+                onStop: _stopNavigation,
+                onTogglePause: _togglePause,
+              ),
+            ],
+          );
+        },
       ),
+    );
+  }
+
+  Widget _buildMetric(IconData icon, String value, String label) {
+    return Column(
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: Colors.blue),
+            const SizedBox(width: 4),
+            Text(value, style: const TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+      ],
     );
   }
 }

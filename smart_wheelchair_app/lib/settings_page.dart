@@ -44,7 +44,7 @@ class SettingsPage extends StatelessWidget {
               Icons.emergency,
               'Add or edit emergency contacts',
               onTap: () {
-                print('Emergency contacts tapped');
+                Navigator.pushNamed(context, '/emergency_contacts');
               },
             ),
             _buildSettingItem(

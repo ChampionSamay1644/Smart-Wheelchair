@@ -36,6 +36,12 @@ class BluetoothProvider extends ChangeNotifier {
   DateTime? get lastUpdate => _lastUpdate;
 
   Future<void> _init() async {
+    if (kIsWeb) {
+      _lastError = 'Bluetooth is only available on mobile devices.';
+      _adapterState = BluetoothState.UNKNOWN;
+      notifyListeners();
+      return;
+    }
     _adapterState = await _service.getState();
     _prefs = await SharedPreferences.getInstance();
     try {

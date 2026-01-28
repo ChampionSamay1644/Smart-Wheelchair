@@ -6,8 +6,10 @@ import 'package:provider/provider.dart';
 import 'core/providers/auth_provider.dart';
 import 'core/providers/connection_provider.dart';
 import 'core/providers/camera_feed_provider.dart';
-import 'bluetooth_connection_page.dart';
 import 'core/providers/bluetooth_provider.dart';
+import 'core/providers/outdoor_navigation_provider.dart';
+import 'core/providers/emergency_contacts_provider.dart';
+import 'bluetooth_connection_page.dart';
 import 'widgets/connection_dialog.dart';
 import 'features/auth/splash_screen.dart';
 import 'features/auth/role_selection_page.dart';
@@ -23,6 +25,7 @@ import 'voice_control_page.dart';
 import 'services/emergency_stop_service.dart';
 import 'core/providers/locale_provider.dart';
 import 'core/localization.dart';
+import 'features/settings/emergency_contacts_page.dart';
 
 void main() {
   runApp(
@@ -33,6 +36,13 @@ void main() {
         ChangeNotifierProvider(create: (_) => CameraFeedProvider()),
         ChangeNotifierProvider(create: (_) => BluetoothProvider()),
         ChangeNotifierProvider(create: (_) => LocaleProvider()),
+        ChangeNotifierProvider(create: (_) => EmergencyContactsProvider()),
+        ChangeNotifierProxyProvider<ConnectionProvider, OutdoorNavigationProvider>(
+          create: (context) => OutdoorNavigationProvider(
+            context.read<ConnectionProvider>(),
+          ),
+          update: (context, connection, navigation) => navigation!,
+        ),
       ],
       child: const MyApp(),
     ),
@@ -45,7 +55,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SmartNav Wheelchair',
+      title: 'SmartNav',
       theme: ThemeData(
         primaryColor: Colors.blue,
         colorScheme: ColorScheme.fromSeed(
@@ -78,6 +88,7 @@ class MyApp extends StatelessWidget {
         '/settings': (context) => SettingsPage(),
         '/location': (context) => const OutdoorNavigationPage(),
         '/bluetooth_connection': (context) => const BluetoothConnectionPage(),
+        '/emergency_contacts': (context) => const EmergencyContactsPage(),
       },
       debugShowCheckedModeBanner: false,
     );
@@ -137,11 +148,15 @@ class _MyHomePageState extends State<MyHomePage> {
         title: Row(
           children: [
             // asset logo with fallback
-            Image.asset(
-              'assets/logo.png',
-              height: 36,
-              errorBuilder: (context, error, stackTrace) =>
-                  const FlutterLogo(size: 36),
+            ClipOval(
+              child: Image.asset(
+                'assets/logo.jpg',
+                height: 36,
+                width: 36,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) =>
+                    const FlutterLogo(size: 36),
+              ),
             ),
             const SizedBox(width: 12),
             Text(

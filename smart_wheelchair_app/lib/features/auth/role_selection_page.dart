@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../../core/enums.dart';
+import '../../../core/providers/outdoor_navigation_provider.dart';
+import 'package:provider/provider.dart';
 
 class RoleSelectionPage extends StatelessWidget {
   const RoleSelectionPage({super.key});
@@ -16,7 +18,7 @@ class RoleSelectionPage extends StatelessWidget {
             children: [
               const SizedBox(height: 48),
               Text(
-                'Welcome to\nSmart Wheelchair',
+                'Welcome to\nSmartNav',
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                   fontWeight: FontWeight.bold,
                 ),
@@ -94,6 +96,7 @@ class RoleSelectionPage extends StatelessWidget {
   }
 
   void _onRoleSelected(BuildContext context, UserRole role) {
+    context.read<OutdoorNavigationProvider>().setUserRole(role);
     String route;
     switch (role) {
       case UserRole.patient:

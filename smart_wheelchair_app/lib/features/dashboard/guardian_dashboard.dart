@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../core/providers/auth_provider.dart';
+import '../../core/providers/outdoor_navigation_provider.dart';
 import 'package:provider/provider.dart';
 import '../outdoor_navigation/map_widget.dart';
 import 'package:latlong2/latlong.dart';
@@ -99,13 +100,51 @@ class GuardianDashboard extends StatelessWidget {
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: MapWidget(
-                        currentPosition: const LatLng(
-                          28.6139,
-                          77.2090,
-                        ), // placeholder
-                        routePoints: const [],
-                        destination: null,
+                      child: Consumer<OutdoorNavigationProvider>(
+                        builder: (context, nav, _) {
+                          final state = nav.state;
+                          return Stack(
+                            children: [
+                              MapWidget(
+                                currentPosition: state.currentPosition ?? const LatLng(28.6139, 77.2090),
+                                routePoints: state.routePoints,
+                                destination: state.destination,
+                              ),
+                              Positioned(
+                                top: 12,
+                                left: 12,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.9),
+                                    borderRadius: BorderRadius.circular(20),
+                                    boxShadow: [
+                                      BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 4),
+                                    ],
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Container(
+                                        width: 8,
+                                        height: 8,
+                                        decoration: const BoxDecoration(
+                                          color: Colors.green,
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      const Text(
+                                        'Patient Live',
+                                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
                     ),
                   ),

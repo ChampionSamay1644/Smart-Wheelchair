@@ -207,8 +207,8 @@ class WheelchairWebSocketService {
     }
   }
 
-  /// Send a control message
-  void _sendMessage(Map<String, dynamic> message) {
+  /// Send a message to the server
+  void sendMessage(Map<String, dynamic> message) {
     if (!_isConnected || _channel == null) {
       debugPrint('Cannot send message: Not connected');
       return;
@@ -226,7 +226,7 @@ class WheelchairWebSocketService {
   /// Start a recording session
   void startRecording() {
     _currentSessionId = DateTime.now().millisecondsSinceEpoch.toString();
-    _sendMessage({'type': 'start_recording', 'session_id': _currentSessionId});
+    sendMessage({'type': 'start_recording', 'session_id': _currentSessionId});
   }
 
   /// Send an audio chunk
@@ -247,24 +247,18 @@ class WheelchairWebSocketService {
 
   /// Stop recording and process the command
   void stopRecording() {
-    _sendMessage({'type': 'stop_recording'});
+    sendMessage({'type': 'stop_recording'});
     _currentSessionId = null;
   }
 
-  /// Cancel the current recording
-  void cancelRecording() {
-    _sendMessage({'type': 'cancel_recording'});
-    _currentSessionId = null;
-  }
-
-  /// Send emergency stop command
+  /// Send an emergency stop command
   void emergencyStop() {
-    _sendMessage({'type': 'emergency_stop'});
+    sendMessage({'type': 'emergency_stop'});
   }
 
   /// Send ping to check connection
   void ping() {
-    _sendMessage({'type': 'ping'});
+    sendMessage({'type': 'ping'});
   }
 
   /// Request voice profile status from the server.
@@ -273,7 +267,7 @@ class WheelchairWebSocketService {
     if (speakerName != null && speakerName.isNotEmpty) {
       payload['speaker_name'] = speakerName;
     }
-    _sendMessage(payload);
+    sendMessage(payload);
   }
 
   /// Start voice enrollment
@@ -285,7 +279,7 @@ class WheelchairWebSocketService {
     String? prompt,
   }) {
     _currentSessionId = DateTime.now().millisecondsSinceEpoch.toString();
-    _sendMessage({
+    sendMessage({
       'type': 'start_voice_enrollment',
       'session_id': _currentSessionId,
       'speaker_name': speakerName,
@@ -304,7 +298,7 @@ class WheelchairWebSocketService {
     int totalSamples = 3,
     bool finalize = false,
   }) {
-    _sendMessage({
+    sendMessage({
       'type': 'stop_voice_enrollment',
       'speaker_name': speakerName,
       'gender': gender,
@@ -317,7 +311,7 @@ class WheelchairWebSocketService {
 
   /// Finalize enrollment with collected samples
   void finishVoiceEnrollment(String speakerName) {
-    _sendMessage({
+    sendMessage({
       'type': 'finish_voice_enrollment',
       'speaker_name': speakerName,
     });
