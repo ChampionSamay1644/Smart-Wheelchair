@@ -26,8 +26,12 @@ import 'services/emergency_stop_service.dart';
 import 'core/providers/locale_provider.dart';
 import 'core/localization.dart';
 import 'features/settings/emergency_contacts_page.dart';
+import 'services/api_service.dart';
+import 'core/providers/api_provider.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await ApiService().init();
   runApp(
     MultiProvider(
       providers: [
@@ -37,6 +41,7 @@ void main() {
         ChangeNotifierProvider(create: (_) => BluetoothProvider()),
         ChangeNotifierProvider(create: (_) => LocaleProvider()),
         ChangeNotifierProvider(create: (_) => EmergencyContactsProvider()),
+        ChangeNotifierProvider(create: (_) => ApiProvider()),
         ChangeNotifierProxyProvider<ConnectionProvider, OutdoorNavigationProvider>(
           create: (context) => OutdoorNavigationProvider(
             context.read<ConnectionProvider>(),

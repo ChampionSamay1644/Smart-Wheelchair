@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import '../../core/localization.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:provider/provider.dart';
+import '../../core/providers/api_provider.dart';
+import 'dart:math' as math;
 
 class HealthStatusPage extends StatefulWidget {
   const HealthStatusPage({super.key});
@@ -15,54 +18,109 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(tr(context, 'health_status'))),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildTimeRangeSelector(),
-            const SizedBox(height: 24),
-            _buildVitalCard(
-              'Heart Rate',
-              '72',
-              'BPM',
-              FontAwesomeIcons.heartPulse,
-              Colors.red,
-              _buildHeartRateChart(),
+    return Consumer<ApiProvider>(
+      builder: (context, apiProvider, _) {
+        final data = apiProvider.latestSensorData;
+        final dht = data['dht11'] ?? {};
+        final max30 = data['max30100'] ?? {};
+        final killswitch = apiProvider.killswitchEnabled;
+
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(tr(context, 'health_status')),
+            actions: [
+              if (apiProvider.isPolling)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16),
+                  child: Icon(Icons.sync, color: Colors.green, size: 16),
+                ),
+            ],
+          ),
+          body: killswitch 
+            ? _buildKillswitchMessage()
+            : SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (apiProvider.selectedDeviceId == null)
+                      _buildNoDeviceWarning(),
+                    _buildTimeRangeSelector(),
+                    const SizedBox(height: 24),
+                    _buildVitalCard(
+                      tr(context, 'heart_rate'),
+                      max30['ir'] != null ? '${(max30['ir'] / 100).round()}' : '--',
+                      'BPM',
+                      FontAwesomeIcons.heartPulse,
+                      Colors.red,
+                      _buildHeartRateChart(),
+                    ),
+                    const SizedBox(height: 16),
+                    _buildVitalCard(
+                      tr(context, 'body_temperature'),
+                      dht['temperature']?.toString() ?? '--',
+                      '°C',
+                      FontAwesomeIcons.temperatureHalf,
+                      Colors.orange,
+                      _buildTemperatureChart(),
+                    ),
+                    const SizedBox(height: 16),
+                    _buildVitalCard(
+                      'Humidity',
+                      dht['humidity']?.toString() ?? '--',
+                      '%',
+                      FontAwesomeIcons.droplet,
+                      Colors.blue,
+                      _buildHumidityChart(),
+                    ),
+                  ],
+                ),
+              ),
+        );
+      },
+    );
+  }
+
+  Widget _buildKillswitchMessage() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.warning_amber_rounded, size: 64, color: Colors.red),
+          const SizedBox(height: 16),
+          Text(
+            'System Temporarily Disabled',
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
+          const Padding(
+            padding: EdgeInsets.all(24.0),
+            child: Text(
+              'Hardware communication is currently disabled by the administrator. Please try again later.',
+              textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 16),
-            _buildVitalCard(
-              'Blood Pressure',
-              '120/80',
-              'mmHg',
-              FontAwesomeIcons.heartCircleCheck,
-              Colors.purple,
-              _buildBloodPressureChart(),
-            ),
-            const SizedBox(height: 16),
-            _buildVitalCard(
-              'Body Temperature',
-              '37.2',
-              '°C',
-              FontAwesomeIcons.temperatureHalf,
-              Colors.orange,
-              _buildTemperatureChart(),
-            ),
-            const SizedBox(height: 16),
-            _buildVitalCard(
-              'Oxygen Saturation',
-              '98',
-              '%',
-              FontAwesomeIcons.lungs,
-              Colors.blue,
-              _buildOxygenChart(),
-            ),
-          ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNoDeviceWarning() {
+    return Card(
+      color: Colors.orange.shade100,
+      child: ListTile(
+        leading: const Icon(Icons.warning, color: Colors.orange),
+        title: const Text('No Wheelchair Selected'),
+        subtitle: const Text('Go to Settings to select your wheelchair device.'),
+        trailing: TextButton(
+          onPressed: () => Navigator.pushNamed(context, '/settings'),
+          child: const Text('Settings'),
         ),
       ),
     );
+  }
+
+  Widget _buildHumidityChart() {
+    return _buildTemperatureChart(); // Use temperature chart as placeholder for historical humidity
   }
 
   Widget _buildTimeRangeSelector() {

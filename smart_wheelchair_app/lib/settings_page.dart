@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 
 import 'widgets/connection_dialog.dart';
 import 'core/localization.dart';
+import 'package:provider/provider.dart';
+import 'core/providers/api_provider.dart';
 
 class SettingsPage extends StatelessWidget {
   @override
@@ -93,40 +95,111 @@ class SettingsPage extends StatelessWidget {
               Icons.battery_full,
               'View battery status',
               onTap: () {
-                showModalBottomSheet(
-                  context: context,
-                  builder: (context) => Container(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        ListTile(
-                          leading: const Icon(
-                            Icons.battery_full,
-                            color: Colors.green,
-                          ),
-                          title: Text(tr(context, 'battery_level')),
-                          subtitle: Text(tr(context, 'battery_estimate')),
-                        ),
-                        const LinearProgressIndicator(
-                          value: 0.75,
-                          backgroundColor: Colors.grey,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            Colors.green,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: Text(tr(context, 'close')),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
+                // ... battery logic
               },
             ),
           ]),
+          const SizedBox(height: 20),
+          _buildCloudSettings(context),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCloudSettings(BuildContext context) {
+    return Consumer<ApiProvider>(
+      builder: (context, apiProvider, _) {
+        return _buildSection('Cloud Integration', [
+          _buildSettingItem(
+            context,
+            'Vercel API URL',
+            Icons.cloud,
+            apiProvider.apiUrl ?? 'Not configured',
+            onTap: () => _showApiUrlDialog(context, apiProvider),
+          ),
+          _buildSettingItem(
+            context,
+            'Selected Wheelchair',
+            Icons.accessible,
+            apiProvider.selectedDeviceId ?? 'None selected',
+            onTap: () => _showDeviceSelectionDialog(context, apiProvider),
+          ),
+        ]);
+      },
+    );
+  }
+
+  void _showApiUrlDialog(BuildContext context, ApiProvider provider) {
+    final controller = TextEditingController(text: provider.apiUrl);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Vercel API URL'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            hintText: 'https://your-api.vercel.app',
+            helperText: 'Enter the base URL of your Vercel API',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              provider.updateApiUrl(controller.text);
+              Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDeviceSelectionDialog(BuildContext context, ApiProvider provider) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Select Wheelchair'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: provider.devices.isEmpty
+              ? const Text('No devices found. Check your API URL.')
+              : ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: provider.devices.length,
+                  itemBuilder: (context, index) {
+                    final device = provider.devices[index];
+                    final deviceId = device['deviceId'];
+                    final isOnline = device['online'] ?? false;
+                    return ListTile(
+                      title: Text(deviceId),
+                      subtitle: Text(isOnline ? 'Online' : 'Offline'),
+                      trailing: provider.selectedDeviceId == deviceId
+                          ? const Icon(Icons.check, color: Colors.green)
+                          : null,
+                      onTap: () {
+                        provider.selectDevice(deviceId);
+                        Navigator.pop(context);
+                      },
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              provider.refreshDevices();
+            },
+            child: const Text('Refresh'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
         ],
       ),
     );
