@@ -46,9 +46,17 @@ except:
 
 from flask import Flask, request, Response, jsonify, make_response
 
+# ---- API Client ----
+from api_client import WheelchairAPIClient, get_sensor_snapshot
+
 
 
 # ====================== USER CONFIG ======================
+
+# API Configuration (for remote Next.js server)
+API_URL = "https://your-app.vercel.app"  # Replace with your Vercel URL
+DEVICE_ID = "wheelchair-rpi-001"  # Unique identifier for this device
+API_UPLOAD_ENABLED = True  # Set to False to disable API uploads
 
 HTTP_PORT = 8080
 
@@ -886,6 +894,45 @@ def bluetooth_reader_thread():
 
 
 
+def api_upload_thread():
+    """Thread to periodically upload sensor data to Next.js API"""
+    if not API_UPLOAD_ENABLED:
+        print("API uploads disabled")
+        return
+    
+    # Initialize API client
+    api_client = WheelchairAPIClient(API_URL, DEVICE_ID)
+    
+    print(f"🌐 API Client initialized: {API_URL}")
+    print(f"📱 Device ID: {DEVICE_ID}")
+    
+    # Check initial status
+    status = api_client.check_status()
+    if status.get('killswitch'):
+        print("⚠️  WARNING: API Killswitch is ENABLED!")
+    else:
+        print("✅ API Status: Active")
+    
+    while True:
+        try:
+            # Collect sensor data
+            sensor_data = get_sensor_snapshot(motors, ultra, dht, max30, state, state_lock)
+            
+            # Upload to API
+            success = api_client.upload_sensor_data(sensor_data)
+            
+            # Periodic status check (every 30 uploads)
+            if int(time.time()) % 30 == 0:
+                status = api_client.check_status()
+                if status.get('killswitch'):
+                    print("⚠️  API Killswitch ENABLED - uploads blocked")
+            
+        except Exception as e:
+            print(f"API upload error: {e}")
+        
+        time.sleep(1.0)  # Upload every second
+
+
 # ---------------------- Flask Web -------------------------
 
 app = Flask(__name__, static_folder=None)
@@ -1355,6 +1402,13 @@ if __name__ == "__main__":
     th_auto = threading.Thread(target=auto_runner_thread, daemon=True)
 
     th_auto.start()
+
+    
+    # API Upload Thread
+    if API_UPLOAD_ENABLED:
+        th_api = threading.Thread(target=api_upload_thread, daemon=True)
+        th_api.start()
+        print("✅ API upload thread started")
 
 
 

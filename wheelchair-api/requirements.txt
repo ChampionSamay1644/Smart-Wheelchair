@@ -1,0 +1,2 @@
+# Python requirements for API client and simulator
+requests>=2.31.0
