@@ -1,0 +1,30 @@
+# ============================================================
+# Smart Wheelchair – Laptop / Development Machine Requirements
+# ============================================================
+# Install with:
+#   pip install -r requirements_laptop.txt
+#
+# Tested on Python 3.10+ (Linux & macOS)
+# ============================================================
+
+# ── WebSocket client (stream viewer / debug tool) ──────────
+websockets>=12.0
+
+# ── Computer Vision (laptop webcam testing) ────────────────
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# ── Camera stream viewer (Qt-based GUI) ────────────────────
+PyQt6>=6.5.0
+
+# ── YOLO object detection (YOLOv8, laptop preview) ─────────
+ultralytics>=8.0.0
+
+# ── Audio playback / recording (for local voice tests) ─────
+sounddevice>=0.4.6
+soundfile>=0.12.0
+
+# ── Utilities ──────────────────────────────────────────────
+python-dotenv>=1.0.0
+requests>=2.31.0
+pillow>=10.0.0            # Image manipulation / JPEG preview
