@@ -1,0 +1,60 @@
+# ============================================================
+# Smart Wheelchair – Raspberry Pi Requirements
+# ============================================================
+# Install with (inside venv):
+#   pip install -r requirements_rpi.txt
+#
+# Tested on Raspberry Pi 4B / 5 running Raspberry Pi OS (Bookworm / Bullseye)
+# Python 3.10+
+# ============================================================
+
+# ── WebSocket server ───────────────────────────────────────
+websockets>=12.0
+
+# ── GPIO & hardware ────────────────────────────────────────
+RPi.GPIO>=0.7.1           # Motor / ultrasonic sensor GPIO control
+
+# ── Bluetooth RFCOMM (app control via Bluetooth) ───────────
+# On Raspberry Pi OS: sudo apt install libbluetooth-dev
+# Then: pip install pybluez2  (preferred fork of pybluez)
+pybluez2>=0.46            # Bluetooth RFCOMM server
+
+# ── Audio pipeline ─────────────────────────────────────────
+numpy>=1.24.0
+scipy>=1.10.0
+sounddevice>=0.4.6        # USB mic capture
+soundfile>=0.12.0
+
+# ── Voice recognition (Whisper STT) ────────────────────────
+# NOTE: install PyTorch for RPI before this (armv7/aarch64 wheel):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0
+faster-whisper>=1.0.1     # Optimised Whisper for low-power hardware
+transformers>=4.36.0
+
+# ── Speaker verification ───────────────────────────────────
+speechbrain>=1.0.0
+
+# ── Audio pre-processing ───────────────────────────────────
+librosa>=0.10.0
+noisereduce>=2.0.3
+pydub>=0.25.1             # Audio format conversion helpers
+torchaudio>=2.0.0
+
+# ── Text-to-speech ─────────────────────────────────────────
+# Uses gTTS or Kokoro-TTS / Piper depending on config
+gTTS>=2.3.2               # Online TTS fallback (English + Hindi)
+
+# ── Camera streaming (venv2 – optional) ────────────────────
+# For rpi_stream_detect_ws.py – install in a separate venv2:
+#   opencv-python>=4.8.0  (or opencv-python-headless for headless Pi)
+#   pillow>=10.0.0
+#   pyturbojpeg>=1.7.1    # Optional: faster JPEG encoding
+
+# ── Fuzzy command matching ─────────────────────────────────
+rapidfuzz>=3.0.0
+
+# ── Utilities ──────────────────────────────────────────────
+python-dotenv>=1.0.0
+requests>=2.31.0
+groq>=0.9.0               # Groq LLM API (voice Q&A mode)
