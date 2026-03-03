@@ -5,161 +5,142 @@
 </p>
 
 > ⚠️ **Note:** This project is currently under active development.  
-> Detailed documentation, hardware schematics, and source code will be released as the project approaches completion.  
-> Thank you for your interest and support!
+> Hardware schematics and remaining sensor integrations are in progress.
 
 ---
 
 ## 🎯 About The Project
 
-The **AI-Powered Smart Wheelchair** is an innovative assistive technology designed to **redefine mobility and care** for individuals with physical impairments.  
+The **AI-Powered Smart Wheelchair (SmartNav)** is an intelligent assistive mobility system designed to enhance **safety, independence, and healthcare accessibility** for individuals with physical impairments.
 
-Unlike traditional wheelchairs, this project transforms the device into an **intelligent companion** that emphasizes **safety, health monitoring, and independence**.
+Unlike traditional wheelchairs, SmartNav integrates:
 
-Our vision is to create a wheelchair that does more than move — it **cares, protects, and empowers**.
+- Voice-controlled navigation  
+- AI-powered authentication  
+- Health monitoring  
+- Emergency communication  
+
+Our vision is to transform a wheelchair into an **intelligent mobility companion** that empowers users while ensuring safety.
 
 ---
 
 ## 🚀 Vision & Objectives
 
-We aim to design a **cost-effective, multifunctional smart wheelchair** that reduces dependency on caregivers while creating a **safer and more connected experience**.
+We aim to build a **cost-effective, intelligent wheelchair system** that minimizes caregiver dependency and maximizes user independence.
 
 ### ✅ Key Objectives
-- **Enhance Safety** → Intelligent automated collision-avoidance system.  
-- **Promote Independence** → Hands-free AI-powered voice navigation.  
-- **Enable Proactive Health Management** → Real-time vitals monitoring + emergency alerts.  
-- **Reduce Medication Errors** → Automated pill dispenser with reminders.  
-- **Improve Sustainability** → Hybrid energy (solar + kinetic) for extended range.  
+
+- **Enhance Safety** → Intelligent automated collision avoidance  
+- **Promote Independence** → Hands-free AI voice navigation  
+- **Enable Health Monitoring** → Real-time vitals tracking  
+- **Emergency Communication** → GSM-based SMS alerts  
+- **Reliable Multimodal Control** → Voice + App + Joystick support  
 
 ---
 
-## Overview
-This project implements a voice-controlled wheelchair system with two operational modes:
-1. **Online LLM Mode**: Authenticated users can ask questions to an online language model
-2. **Command Mode**: Authenticated users can control the wheelchair using voice commands
+## 📌 Overview
 
-## ✨ Core Features (In Development)
+SmartNav operates in two primary modes:
+
+1. **Online LLM Mode**  
+   Authenticated users can ask general queries to a lightweight LLM.
+
+2. **Command Mode**  
+   Authenticated users control wheelchair movement using voice commands.
+
+---
+
+## ✨ Core Features
 
 | Feature | Description |
-|---------|-------------|
-| 🎤 **Multilingual Speech-to-Text** | Converts spoken commands from users into text in multiple languages to ensure accessibility. |
-| 🎙️ **Voice Command Recognition** | Detects and identifies voice commands to control wheelchair navigation hands-free. |
-| 🛑 **Collision Avoidance** | Uses ultrasonic sensors to detect obstacles and automatically stop or reroute to prevent accidents. |
-| ❤️ **Health Monitoring** | Continuously tracks **pulse rate and body temperature**, showing real-time health data on an onboard screen. |
-| 📧 **Emergency SMS Alerts** | Sends real-time health data and location alerts to caregivers or family during abnormal readings or emergencies. |
-| ☀️ **Dual Energy System** | Combines a solar panel (which also serves as a sunshade) with a hub dynamo to sustainably charge the battery. |
-| 🕹️ **Multimodal controls** | Offers alternative input modes—such as voice, application input, or joystick for users who cannot rely solely on voice. |
+|----------|------------|
+| 🎤 **Multilingual Speech-to-Text** | Supports Hindi, English, and Marathi |
+| 🔐 **Voice Authentication** | Secure speaker verification before control access |
+| 🛑 **Collision Avoidance** | Ultrasonic-based obstacle detection |
+| ❤️ **Health Monitoring** | Pulse + Temperature monitoring (integration in progress) |
+| 📍 **Location Tracking** | GPS-based position detection (integration pending) |
+| 📧 **Emergency SMS Alerts** | GSM-based alert system (integration pending) |
+| 🕹️ **Multimodal Controls** | Voice, mobile app, and joystick |
 
 ---
 
-## 🛠️ Technology Stack (Planned)
+## 🛠️ Technology Stack
 
-- **Primary Controller** → Raspberry Pi (AI, voice, decision-making)  
-- **Real-time Controller** → ESP32 (sensors, motors, real-time tasks)  
-- **Software** → Python (high-level control), C++/Arduino (low-level management)  
-- **Sensors** → Ultrasonic, MAX30102 (pulse), DS18B20 (temperature)  
-- **Communication** → SIM800L GSM module (SMS alerts)  
+### 🖥 Controllers
+- **Primary Controller** → Raspberry Pi 4B  
+- **Real-Time Control** → Raspberry Pi (same unit handles control tasks)  
+- **Peripheral Communication** → ESP module (GSM communication only)
 
----
-
-## 📈 Project Status
-
-🔧 Currently in **hardware integration & software development phase**.  
-Our immediate milestones:  
-- Finalize control algorithms  
-- Begin rigorous system testing  
-
-Stay tuned for updates — this repo will soon include **detailed documentation, hardware schematics, and full source code**.  
+> Note: ESP is used strictly as a peripheral device to interface with the GSM module for sending alerts.
 
 ---
 
-## ⚙️ Technical Implementation Details
+### 💻 Software
+- Python (High-level AI & system control)
+- C++ (Low-level hardware interfacing where required)
 
-### Key System Features
-- **Voice Authentication**: Secure access through voice profile matching
-- **Comprehensive Multilingual Command Support**: Recognizes commands in all languages supported by Whisper models:
-  - English
-  - Hindi
-  - Marathi
-  - Spanish
-  - French
-  - German
-  - Italian
-  - Chinese
-  - Japanese
-  - Russian
-  - And many more languages
-- **Enhanced Command Recognition**: Uses advanced fuzzy matching and phonetic algorithms
-- **Automatic Language Detection**: Automatically identifies the spoken language
-- **Text-to-Speech Feedback**: Provides auditory feedback for commands in the detected language
-- **Optimized for Raspberry Pi 4B**: Efficient resource usage for embedded platform
+---
 
-### 🗣️ Multilingual Command System
-The system can recognize commands in multiple languages and handle phonetic variations using the Whisper tiny model:
+### 🔍 Sensors (Integration Pending)
 
-#### Supported Commands in Multiple Languages
-- **Forward**: 
-  - English: "forward", "go ahead", "straight" 
-  - Hindi: "aage badho", "आगे बढ़ो"
-  - Marathi: "pudhe ja", "पुढे जा"
-  - Spanish: "adelante", "sigue adelante"
-  - French: "avancer", "en avant"
-  - German: "vorwärts", "geradeaus" 
-  - Italian: "avanti", "vai avanti"
-  - Chinese: "前进", "向前"
-  - Japanese: "前進", "前へ"
-  - Russian: "вперед", "прямо"
+- MAX30100 – Pulse sensor  
+- DHT11 – Temperature sensor  
+- Neo-6M – GPS module  
+- Ultrasonic Sensors – Obstacle detection  
 
-- **Backward**: 
-  - English: "backward", "go back", "reverse"
-  - Hindi: "peeche jao", "पीछे जाओ"
-  - Marathi: "mage ja", "मागे जा"
-  - Spanish: "atrás", "hacia atrás"
-  - French: "reculer", "en arrière"
-  - German: "rückwärts", "zurück"
-  - Italian: "indietro", "vai indietro"
-  - Chinese: "后退", "向后"
-  - Japanese: "後退", "バック"
-  - Russian: "назад", "задний ход"
-  
-- **Left**/**Right**: Similar multilingual support for all directions
-- **Start**/**Stop**: Full multilingual command recognition
+---
 
-#### Phonetic Recognition
-The system handles common speech-to-text errors in transcription:
-- "bye mude" → recognized as "baaye mudo" (turn left in Hindi)
-- "die mude" → recognized as "daaye mudo" (turn right in Hindi)
+### 📡 Communication
+- SIM800L GSM module (SMS alerts)
 
-### 🧠 AI Models Used
+---
 
-The SmartNav wheelchair control system leverages several key AI models to achieve robust performance:
+## 🌍 Multilingual Command Support
 
-1. **Speech Recognition**: OpenAI's Whisper Tiny Model
-   - Optimized for low-latency command recognition on Raspberry Pi
-   - Supports 30+ languages with on-device processing
-   - Quantized to 8-bit for efficient CPU execution
+SmartNav currently supports:
 
-2. **Voice Authentication**: Custom Voice Encoder
-   - Uses Resemblyzer for speaker verification
-   - Creates voice embeddings for secure user authentication
-   - Low false-positive rate with optimized thresholds
+- English  
+- Hindi  
+- Marathi  
 
-3. **Language Understanding**: Fuzzy Matching & Phonetic Algorithms
-   - Handles variations in pronunciation and speech patterns
-   - Adapts to accents and speech impediments
-   - Custom pattern matching for improved command accuracy
+### Example Commands
 
-4. **Text-to-Speech**: Piper TTS
-   - Offline, lightweight TTS engine
-   - Multi-voice support (male/female) across languages
-   - ONNX runtime optimized for Raspberry Pi
+**Forward**
+- English: "forward", "go ahead"
+- Hindi: "आगे बढ़ो"
+- Marathi: "पुढे जा"
 
-5. **Conversational AI**: Llama 3.2-3B-Instruct (optional)
-   - Low-resource LLM for conversational support
-   - Can run locally or access cloud API when connectivity available
-   - Provides contextual responses to user questions
+**Backward**
+- English: "back"
+- Hindi: "पीछे जाओ"
+- Marathi: "मागे जा"
 
-### 🔄 System Architecture
+**Left / Right / Stop**
+- Fully supported in all three languages.
+
+The system uses fuzzy matching and phonetic correction for improved recognition accuracy.
+
+---
+
+## 🧠 AI Models Used
+
+### 1️⃣ Speech Recognition
+- Whisper Tiny (optimized for Raspberry Pi)
+- On-device processing
+
+### 2️⃣ Voice Authentication
+- Resemblyzer-based speaker embeddings
+- Similarity threshold validation
+
+### 3️⃣ Text-to-Speech
+- Piper TTS (offline)
+
+### 4️⃣ Conversational Mode
+- Llama 3.2-3B-Instruct (Optional LLM mode)
+
+---
+
+## 🔄 System Architecture
 
 The wheelchair control system is built on a modular architecture:
 
@@ -275,46 +256,48 @@ WebSocket remains available for voice authentication and LLM features.
 
 ---
 
-## 📽️ Demo Video
+## 📈 Project Status
 
-[Demo video coming soon]
+### ✅ Software
+- 100% Implemented  
+- Voice authentication  
+- Multilingual command recognition  
+- Bluetooth control pipeline  
+- LLM query mode  
+
+### 🚧 Hardware Integration Pending
+- MAX30100 sensor data fetching  
+- DHT11 sensor data fetching  
+- Neo-6M GPS data integration  
+- GSM alert triggering system  
 
 ---
 
-## 💡 Current Development Focus
+## 🎯 Current Development Focus
 
-Our current development focus is on:
+1. Sensor data acquisition (MAX30100, DHT11, Neo-6M)
+2. GSM-based emergency alert integration
+3. Hardware testing and validation
+4. Real-world safety testing
 
-1. **Performance Optimization**
-   - Reducing command recognition latency to <1 second
-   - Optimizing memory usage on Raspberry Pi 4B
-   - Fine-tuning voice recognition for noisy environments
+---
 
-2. **Multilingual Support Enhancement**
-   - Expanding command vocabulary in regional languages
-   - Improving accent handling in speech recognition
-   - Adding more TTS voices for natural feedback
+## 📽️ Demo
 
-3. **Integration with Hardware**
-   - Motor control interfacing
-   - Sensor fusion for environment awareness
-   - Battery management and power optimization
-
-4. **Mobile Application Development**
-   - Flutter-based companion app for remote control
-   - Real-time health monitoring dashboard
-   - Emergency contact management
+Demo video coming soon.
 
 ---
 
 ## 📞 Contact
 
-For questions, suggestions, or contributions, please contact:
-- **Email**: your.email@example.com
-- **GitHub**: [Open an Issue](https://github.com/championsamay/Smart-Wheelchair/issues)
+For queries, collaboration, or technical discussion:
+
+- samaypandey2022@kccemsr.edu.in  
+- nishalpoojary2022@kccemsr.edu.in  
+- aaryawalve2022@kccemsr.edu.in  
 
 ---
 
 ## 📃 License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License.
