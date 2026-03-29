@@ -19,22 +19,35 @@ import requests
 class WheelchairSimulator:
     """Simulates sensor data from a smart wheelchair"""
     
-    def __init__(self, api_url: str, device_id: str = "simulator-001"):
+    def __init__(self, api_url: str, device_id: str = "simulator-001", patient_password: str = "pat_123", guardian_password: str = "gua_123", no_motor: bool = False):
         """
         Initialize the simulator
         
         Args:
             api_url: Base URL of the Next.js API
             device_id: Unique device identifier
+            patient_password: Password for patient app login
+            guardian_password: Password for guardian app login
         """
         self.api_url = api_url.rstrip('/')
         self.device_id = device_id
+        self.patient_password = patient_password
+        self.guardian_password = guardian_password
+        self.no_motor = no_motor
+        self.sim_gps = False # Will be set by main
         self.upload_endpoint = f"{self.api_url}/api/sensors/upload"
         self.status_endpoint = f"{self.api_url}/api/status"
         
+        # Initial GPS position (Mumbai - Gateway of India)
+        self.lat = 18.92183
+        self.lng = 72.83470
+        
         self.session = requests.Session()
         self.session.headers.update({
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'X-Device-Id': self.device_id,
+            'X-Patient-Password': self.patient_password,
+            'X-Guardian-Password': self.guardian_password
         })
         
         # Simulation state
@@ -49,6 +62,7 @@ class WheelchairSimulator:
         self.current_command = 'S'
         self.mode = 'REMOTE'
         self.obstacle = None
+        self.battery_level = 100.0
         
     def check_status(self) -> Dict[str, Any]:
         """Check API status and killswitch"""
@@ -95,37 +109,73 @@ class WheelchairSimulator:
         else:
             self.obstacle = None
         
-        # Simulate heart rate sensor values
-        self.ir_value = max(1000, min(10000, self.ir_value + random.randint(-200, 200)))
-        self.red_value = max(1000, min(10000, self.red_value + random.randint(-200, 200)))
+        # Simulate heart rate sensor values (Realistic human range)
+        # Randomly spike values to test API thresholds (Pulse > 120, SpO2 < 90)
+        chance = random.random()
+        if chance < 0.05: # 5% chance of high pulse
+            self.ir_value = random.randint(12100, 13500) # Results in 121-135 BPM
+            self.red_value = random.randint(9200, 9500)
+        elif chance < 0.10: # 5% chance of low SpO2
+            self.ir_value = random.randint(7000, 8500)
+            self.red_value = random.randint(8500, 8900) # Results in < 90%
+        else:
+            self.ir_value = max(6000, min(8500, self.ir_value + random.randint(-150, 150)))
+            self.red_value = max(9400, min(9900, self.red_value + random.randint(-50, 50)))
+
+        # Simulate small GPS drift if enabled
+        if self.sim_gps:
+            self.lat += random.uniform(-0.0001, 0.0001)
+            self.lng += random.uniform(-0.0001, 0.0001)
         
         # Occasionally change motor command
-        if random.random() < 0.1:  # 10% chance
+        if random.random() < 0.2:  # 20% chance to change movement
             self.current_command = random.choice(self.motor_commands)
+        elif random.random() < 0.4: # 40% chance to keep moving
+            pass # Keep current_command
+        else:
+            self.current_command = 'S' # 40% chance to stop
+        
+        # Simulate battery drain (faster if moving)
+        drain = 0.05 if self.current_command == 'S' else 0.15
+        self.battery_level -= drain
+        self.battery_level = max(0.0, self.battery_level)
         
         # Build sensor data payload
         payload = {
             "deviceId": self.device_id,
             "timestamp": int(time.time() * 1000),
             "dht11": {
-                "temperature": round(self.temperature, 2),
-                "humidity": round(self.humidity, 2)
+                "temperature": round(self.temperature, 1),
+                "humidity": round(self.humidity, 1)
             },
             "ultrasonic": {
-                "front": round(self.distance_front, 2),
-                "left": round(self.distance_left, 2),
-                "right": round(self.distance_right, 2)
+                "front": round(self.distance_front, 1),
+                "left": round(self.distance_left, 1),
+                "right": round(self.distance_right, 1)
             },
             "max30100": {
                 "ir": int(self.ir_value),
                 "red": int(self.red_value)
             },
-            "motorStatus": {
-                "lastCommand": self.current_command,
-                "mode": self.mode
-            },
             "obstacle": self.obstacle
         }
+
+        # Include navigation if GPS simulation is enabled
+        if self.sim_gps:
+            payload["navigation"] = {
+                "currentPosition": {
+                    "lat": self.lat,
+                    "lng": self.lng
+                },
+                "timestamp": int(time.time() * 1000)
+            }
+        
+        if not self.no_motor:
+            payload["motorStatus"] = {
+                "lastCommand": self.current_command,
+                "mode": self.mode,
+                "battery": round(self.battery_level, 1)
+            }
         
         return payload
     
@@ -226,12 +276,15 @@ class WheelchairSimulator:
                 
                 # Print status
                 status_icon = "✅" if success else "❌"
+                motor_val = data['motorStatus']['lastCommand'] if 'motorStatus' in data else "Disabled"
+                
+                gps_str = f"{self.lat:.5f},{self.lng:.5f}" if self.sim_gps else "Off"
+                
                 print(f"{status_icon} Upload #{upload_count:04d} | "
+                      f"GPS: {gps_str} | "
+                      f"Battery: {self.battery_level:.1f}% | "
                       f"Temp: {data['dht11']['temperature']:.1f}°C | "
-                      f"Hum: {data['dht11']['humidity']:.1f}% | "
-                      f"Front: {data['ultrasonic']['front']:.1f}cm | "
-                      f"Obstacle: {data['obstacle'] or 'Clear'} | "
-                      f"Motor: {data['motorStatus']['lastCommand']}")
+                      f"Motor: {motor_val}")
                 
                 time.sleep(interval)
                 
@@ -260,13 +313,23 @@ def main():
     )
     parser.add_argument(
         '--url',
-        default='https://smartwheelchair.vercel.app',
-        help='API base URL (default: https://smartwheelchair.vercel.app)'
+        default='https://wheelchair-api.vercel.app',
+        help='API base URL (default: https://wheelchair-api.vercel.app)'
     )
     parser.add_argument(
         '--device-id',
-        default='simulator-001',
-        help='Device identifier (default: simulator-001)'
+        default='TEST_001',
+        help='Device identifier (default: TEST_001)'
+    )
+    parser.add_argument(
+        '--patient-password',
+        default='pat_123',
+        help='Patient password (default: pat_123)'
+    )
+    parser.add_argument(
+        '--guardian-password',
+        default='gua_123',
+        help='Guardian password (default: gua_123)'
     )
     parser.add_argument(
         '--interval',
@@ -280,14 +343,28 @@ def main():
         default=None,
         help='Total duration in seconds (default: infinite)'
     )
+    parser.add_argument(
+        '--no-motor',
+        action='store_true',
+        help='Disable motor status simulation (to avoid conflicts with app)'
+    )
+    parser.add_argument(
+        '--gps',
+        action='store_true',
+        help='Enable GPS simulation (useful for testing without hardware)'
+    )
     
     args = parser.parse_args()
     
     # Create and run simulator
     simulator = WheelchairSimulator(
         api_url=args.url,
-        device_id=args.device_id
+        device_id=args.device_id,
+        patient_password=args.patient_password,
+        guardian_password=args.guardian_password,
+        no_motor=args.no_motor
     )
+    simulator.sim_gps = args.gps
     
     simulator.run(interval=args.interval, duration=args.duration)
 
