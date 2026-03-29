@@ -49,12 +49,6 @@ class RoleSelectionPage extends StatelessWidget {
                       FontAwesomeIcons.userShield,
                       Colors.green,
                     ),
-                    _buildRoleCard(
-                      context,
-                      UserRole.doctor,
-                      FontAwesomeIcons.userDoctor,
-                      Colors.red,
-                    ),
                   ],
                 ),
               ),
@@ -97,15 +91,10 @@ class RoleSelectionPage extends StatelessWidget {
 
   void _onRoleSelected(BuildContext context, UserRole role) {
     context.read<OutdoorNavigationProvider>().setUserRole(role);
-    String route;
-    switch (role) {
-      case UserRole.patient:
-        route = '/patient_dashboard';
-      case UserRole.doctor:
-        route = '/doctor_dashboard';
-      case UserRole.guardian:
-        route = '/guardian_dashboard';
-    }
-    Navigator.pushReplacementNamed(context, route);
+    Navigator.pushReplacementNamed(
+      context,
+      '/login',
+      arguments: role,
+    );
   }
 }

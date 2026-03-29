@@ -93,7 +93,13 @@ class WheelchairWebSocketService {
           }
         },
         onError: (error) {
-          debugPrint('WebSocket error: $error');
+          // Be less noisy for common network timeouts/failures
+          final errorStr = error.toString();
+          if (errorStr.contains('Connection timed out') || errorStr.contains('SocketException')) {
+            debugPrint('⚠️ WebSocket: Device at $_lastIp is unreachable (Timeout).');
+          } else {
+            debugPrint('❌ WebSocket error: $error');
+          }
           _emitDisconnected('Connection error: $error');
         },
         onDone: () {
@@ -188,7 +194,11 @@ class WheelchairWebSocketService {
     _reconnectAttempts = 0;
 
     if (_channel != null) {
-      await _channel!.sink.close();
+      try {
+        await _channel!.sink.close();
+      } catch (e) {
+        debugPrint('Error closing WebSocket sink: $e');
+      }
       _channel = null;
     }
 

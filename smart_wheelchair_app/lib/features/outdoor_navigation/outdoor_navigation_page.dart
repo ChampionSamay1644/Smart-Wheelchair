@@ -12,6 +12,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:http/http.dart' as http;
 
 import '../../core/providers/outdoor_navigation_provider.dart';
+import '../../core/providers/api_provider.dart';
 import 'map_widget.dart';
 import 'search_bar_widget.dart';
 import 'navigation_controls_widget.dart';
@@ -24,20 +25,13 @@ class OutdoorNavigationPage extends StatefulWidget {
 }
 
 class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
-  StreamSubscription<Position>? _positionSub;
-  final LatLng _fallbackPosition = LatLng(28.7041, 77.1025);
-
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initLocation();
-    });
   }
 
   @override
   void dispose() {
-    _positionSub?.cancel();
     super.dispose();
   }
 
@@ -51,7 +45,6 @@ class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
 
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
-        navProvider.updatePosition(_fallbackPosition);
         return;
       }
 
@@ -62,55 +55,23 @@ class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
       navProvider.updatePosition(LatLng(pos.latitude, pos.longitude));
     } catch (e) {
       debugPrint('Failed to get location: $e');
-      navProvider.updatePosition(_fallbackPosition);
     }
   }
 
-  void _startNavigation() async {
+  void _startNavigation() {
     final navProvider = context.read<OutdoorNavigationProvider>();
-    try {
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission != LocationPermission.always && permission != LocationPermission.whileInUse) {
-        permission = await Geolocator.requestPermission();
-      }
-
-      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Permission denied')));
-        return;
-      }
-
-      _positionSub?.cancel();
-      _positionSub = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.best, distanceFilter: 5),
-      ).listen((pos) {
-        if (!mounted) return;
-        navProvider.updatePosition(LatLng(pos.latitude, pos.longitude));
-      });
-
-      navProvider.setNavigating(true);
-      navProvider.setPaused(false);
-    } catch (e) {
-      debugPrint('Failed to start navigation: $e');
-    }
+    navProvider.setNavigating(true);
+    navProvider.setPaused(false);
   }
 
   void _stopNavigation() {
     final navProvider = context.read<OutdoorNavigationProvider>();
-    _positionSub?.cancel();
-    _positionSub = null;
     navProvider.setNavigating(false);
     navProvider.setPaused(false);
   }
 
   void _togglePause() {
     final navProvider = context.read<OutdoorNavigationProvider>();
-    if (_positionSub == null) return;
-    if (navProvider.state.isPaused) {
-      _positionSub!.resume();
-    } else {
-      _positionSub!.pause();
-    }
     navProvider.setPaused(!navProvider.state.isPaused);
   }
 
@@ -130,15 +91,41 @@ class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
               Expanded(
                 child: Stack(
                   children: [
-                    MapWidget(
-                      currentPosition: state.currentPosition ?? _fallbackPosition,
-                      routePoints: state.routePoints,
-                      destination: state.destination,
-                      onTap: (point) async {
-                        nav.setDestination(point);
-                        await nav.fetchRoute();
-                      },
-                    ),
+                    if (state.currentPosition != null)
+                      MapWidget(
+                        currentPosition: state.currentPosition!,
+                        routePoints: state.routePoints,
+                        destination: state.destination,
+                        onTap: (point) async {
+                          nav.setDestination(point);
+                          await nav.fetchRoute();
+                        },
+                      )
+                    else
+                      Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const CircularProgressIndicator(),
+                            const SizedBox(height: 16),
+                            Consumer<ApiProvider>(
+                              builder: (context, api, _) {
+                                String msg = 'Waiting for GPS signal...';
+                                if (api.apiUrl == null || api.apiUrl!.isEmpty) {
+                                  msg = '⚠️ API URL not configured in Settings';
+                                } else if (api.selectedDeviceId == null) {
+                                  msg = '⚠️ Wheelchair Device ID not set';
+                                }
+                                return Text(
+                                  msg,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
                     if (state.searchResults.isNotEmpty)
                       Positioned(
                         top: 0,

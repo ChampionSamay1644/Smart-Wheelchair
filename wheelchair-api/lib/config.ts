@@ -21,6 +21,20 @@ export interface SensorData {
   motorStatus?: {
     lastCommand: string;
     mode: string;
+    battery?: number;
+  };
+  navigation?: {
+    currentPosition?: {
+      lat: number;
+      lng: number;
+    };
+    destination?: {
+      lat: number;
+      lng: number;
+    };
+    isNavigating?: boolean;
+    isPaused?: boolean;
+    destinationAddress?: string;
   };
   obstacle?: string | null;
 }

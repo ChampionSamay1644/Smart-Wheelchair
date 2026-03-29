@@ -6,10 +6,16 @@ import 'widgets/connection_dialog.dart';
 import 'core/localization.dart';
 import 'package:provider/provider.dart';
 import 'core/providers/api_provider.dart';
+import 'core/providers/auth_provider.dart';
+import 'core/providers/connection_provider.dart';
+import 'core/enums.dart';
 
 class SettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final userRole = context.read<AuthProvider>().userRole;
+    final isPatient = userRole == UserRole.patient;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(tr(context, 'settings')),
@@ -18,27 +24,29 @@ class SettingsPage extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _buildSection(tr(context, 'wheelchair_configuration'), [
-            _buildSettingItem(
-              context,
-              tr(context, 'speed_control'),
-              Icons.speed,
-              'Adjust maximum speed limit',
-              onTap: () {
-                print('Speed settings tapped');
-              },
-            ),
-            _buildSettingItem(
-              context,
-              tr(context, 'sensitivity'),
-              Icons.tune,
-              'Adjust control sensitivity',
-              onTap: () {
-                print('Sensitivity settings tapped');
-              },
-            ),
-          ]),
-          const SizedBox(height: 20),
+          if (isPatient) ...[
+            _buildSection(tr(context, 'wheelchair_configuration'), [
+              _buildSettingItem(
+                context,
+                tr(context, 'speed_control'),
+                Icons.speed,
+                'Adjust maximum speed limit',
+                onTap: () {
+                  print('Speed settings tapped');
+                },
+              ),
+              _buildSettingItem(
+                context,
+                tr(context, 'sensitivity'),
+                Icons.tune,
+                'Adjust control sensitivity',
+                onTap: () {
+                  print('Sensitivity settings tapped');
+                },
+              ),
+            ]),
+            const SizedBox(height: 20),
+          ],
           _buildSection(tr(context, 'user_preferences'), [
             _buildSettingItem(
               context,
@@ -49,16 +57,17 @@ class SettingsPage extends StatelessWidget {
                 Navigator.pushNamed(context, '/emergency_contacts');
               },
             ),
-            _buildSettingItem(
-              context,
-              tr(context, 'voice_commands'),
-              Icons.record_voice_over,
-              'Customize voice commands',
-              onTap: () {
-                print('Voice commands settings tapped');
-                Navigator.pushNamed(context, '/voice_control');
-              },
-            ),
+            if (isPatient)
+              _buildSettingItem(
+                context,
+                tr(context, 'voice_commands'),
+                Icons.record_voice_over,
+                'Customize voice commands',
+                onTap: () {
+                  print('Voice commands settings tapped');
+                  Navigator.pushNamed(context, '/voice_control');
+                },
+              ),
           ]),
           const SizedBox(height: 20),
           _buildSection(tr(context, 'system'), [
@@ -71,24 +80,26 @@ class SettingsPage extends StatelessWidget {
                 print('Device info tapped');
               },
             ),
-            _buildSettingItem(
-              context,
-              tr(context, 'bluetooth_control'),
-              Icons.bluetooth,
-              'Pair and monitor wheelchair connection',
-              onTap: () {
-                Navigator.pushNamed(context, '/bluetooth_connection');
-              },
-            ),
-            _buildSettingItem(
-              context,
-              tr(context, 'connection_status'),
-              Icons.bluetooth,
-              'Check device connectivity',
-              onTap: () {
-                ConnectionDialog.show(context);
-              },
-            ),
+            if (isPatient) ...[
+              _buildSettingItem(
+                context,
+                tr(context, 'bluetooth_control'),
+                Icons.bluetooth,
+                'Pair and monitor wheelchair connection',
+                onTap: () {
+                  Navigator.pushNamed(context, '/bluetooth_connection');
+                },
+              ),
+              _buildSettingItem(
+                context,
+                tr(context, 'connection_status'),
+                Icons.bluetooth,
+                'Check device connectivity',
+                onTap: () {
+                  ConnectionDialog.show(context);
+                },
+              ),
+            ],
             _buildSettingItem(
               context,
               tr(context, 'battery'),
@@ -123,6 +134,18 @@ class SettingsPage extends StatelessWidget {
             Icons.accessible,
             apiProvider.selectedDeviceId ?? 'None selected',
             onTap: () => _showDeviceSelectionDialog(context, apiProvider),
+          ),
+          SwitchListTile(
+            title: const Text('Local Mock Mode'),
+            subtitle: const Text('Bypass API and use simulated data for testing UI'),
+            secondary: const Icon(Icons.bug_report, color: Colors.orange),
+            value: apiProvider.mockMode,
+            onChanged: (value) {
+              apiProvider.toggleMockMode(value);
+              if (value) {
+                context.read<ConnectionProvider>().disconnect(userInitiated: true);
+              }
+            },
           ),
         ]);
       },

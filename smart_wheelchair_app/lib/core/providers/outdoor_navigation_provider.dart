@@ -3,8 +3,11 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:http/http.dart' as http;
+import 'package:geolocator/geolocator.dart';
 import '../enums.dart';
 import 'connection_provider.dart';
+import 'api_provider.dart';
+import '../../services/api_service.dart';
 
 class NavigationState {
   final LatLng? currentPosition;
@@ -77,21 +80,33 @@ class NavigationState {
 
 class OutdoorNavigationProvider extends ChangeNotifier {
   final ConnectionProvider _connectionProvider;
+  final ApiProvider _apiProvider;
+  final ApiService _apiService = ApiService();
   UserRole? _userRole;
   
   NavigationState _state = NavigationState();
   NavigationState get state => _state;
 
   StreamSubscription? _msgSub;
+  StreamSubscription<Position>? _positionSub;
+  Timer? _cloudPollTimer;
   String _lastQuery = '';
   bool get lastQueryNotEmpty => _lastQuery.trim().isNotEmpty;
 
-  OutdoorNavigationProvider(this._connectionProvider) {
+  OutdoorNavigationProvider(this._connectionProvider, this._apiProvider) {
     _initSync();
   }
 
   void setUserRole(UserRole role) {
     _userRole = role;
+    _cloudPollTimer?.cancel();
+    _positionSub?.cancel();
+    
+    if (_userRole == UserRole.guardian) {
+      _startCloudPolling();
+    } else if (_userRole == UserRole.patient) {
+      _startLocationTracking();
+    }
     notifyListeners();
   }
 
@@ -101,6 +116,23 @@ class OutdoorNavigationProvider extends ChangeNotifier {
         if (msg['data'] != null) {
           _handleRemoteUpdate(msg['data']);
         }
+      }
+    });
+  }
+
+  void _startCloudPolling() {
+    _cloudPollTimer?.cancel();
+    _cloudPollTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+      if (_userRole != UserRole.guardian || _apiProvider.selectedDeviceId == null) return;
+      
+      try {
+        final data = await _apiService.fetchLatestSensorData(_apiProvider.selectedDeviceId!);
+        if (data.containsKey('navigation')) {
+          debugPrint('☁️ Map Sync: Received location from cloud');
+          _handleRemoteUpdate(data['navigation']);
+        }
+      } catch (e) {
+        debugPrint('Cloud navigation poll failed: $e');
       }
     });
   }
@@ -134,6 +166,41 @@ class OutdoorNavigationProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> _startLocationTracking() async {
+    try {
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        debugPrint('📍 GPS: Permission denied');
+        return;
+      }
+
+      // Get initial position
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.best),
+      );
+      updatePosition(LatLng(pos.latitude, pos.longitude));
+
+      // Subscribe to stream
+      _positionSub?.cancel();
+      _positionSub = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.best,
+          distanceFilter: 5,
+        ),
+      ).listen((pos) {
+        updatePosition(LatLng(pos.latitude, pos.longitude));
+      });
+      debugPrint('📍 GPS: Tracking started');
+    } catch (e) {
+      debugPrint('📍 GPS Error: $e');
+    }
+  }
+
   Future<void> searchLocation(String query) async {
     _lastQuery = query;
     if (query.trim().isEmpty) {
@@ -150,15 +217,14 @@ class OutdoorNavigationProvider extends ChangeNotifier {
       'format': 'json',
       'addressdetails': '1',
       'limit': '10',
-      'countrycodes': 'in', // Restrict search to India for accuracy
+      'countrycodes': 'in',
     };
 
-    // Prioritize results near current position if available
     if (_state.currentPosition != null) {
       final lat = _state.currentPosition!.latitude;
       final lon = _state.currentPosition!.longitude;
       params['viewbox'] = '${lon - 0.2},${lat + 0.2},${lon + 0.2},${lat - 0.2}';
-      params['bounded'] = '0'; // Prioritize but don't strictly limit
+      params['bounded'] = '0';
     }
 
     final uri = Uri.parse('https://nominatim.openstreetmap.org/search').replace(queryParameters: params);
@@ -178,17 +244,14 @@ class OutdoorNavigationProvider extends ChangeNotifier {
           isSearching: false,
         );
       } else {
-        debugPrint('Nominatim 403/Error: ${res.statusCode}. Falling back to Photon...');
         await _searchWithPhoton(query);
       }
     } catch (e) {
-      debugPrint('Nominatim failed: $e. Falling back to Photon...');
       await _searchWithPhoton(query);
     }
     notifyListeners();
   }
 
-  /// Photon (Komoot) fallback - often faster and more lenient with rate limits
   Future<void> _searchWithPhoton(String query) async {
     final uri = Uri.parse('https://photon.komoot.io/api/').replace(queryParameters: {
       'q': query,
@@ -208,7 +271,6 @@ class OutdoorNavigationProvider extends ChangeNotifier {
           final props = f['properties'] ?? {};
           final coords = f['geometry']['coordinates'] as List;
           
-          // Build a display name similar to Nominatim
           String name = props['name'] ?? '';
           String city = props['city'] ?? props['district'] ?? '';
           String country = props['country'] ?? '';
@@ -229,13 +291,7 @@ class OutdoorNavigationProvider extends ChangeNotifier {
         _state = _state.copyWith(isSearching: false);
       }
     } catch (e) {
-      debugPrint('Photon fallback also failed: $e');
-      _state = _state.copyWith(
-        isSearching: false,
-        searchResults: [
-          {'display_name': 'Search failed. Please check connection.'}
-        ],
-      );
+      _state = _state.copyWith(isSearching: false);
     }
   }
 
@@ -298,6 +354,7 @@ class OutdoorNavigationProvider extends ChangeNotifier {
   }
 
   void updatePosition(LatLng position) {
+    debugPrint('📍 GPS Update: ${position.latitude}, ${position.longitude}');
     _state = _state.copyWith(currentPosition: position);
     _broadcastState();
     notifyListeners();
@@ -328,17 +385,31 @@ class OutdoorNavigationProvider extends ChangeNotifier {
   }
 
   void _broadcastState() {
+    // Bluetooth/Local Sync
     if (_userRole == UserRole.patient && _connectionProvider.isConnected) {
       _connectionProvider.sendMessage({
         'type': 'navigation_update',
         'data': _state.toJson(),
       });
     }
+
+    // Cloud Sync
+    if (_userRole == UserRole.patient && _apiProvider.selectedDeviceId != null) {
+      debugPrint('☁️ Map Sync: Attempting upload for ${_apiProvider.selectedDeviceId}');
+      _apiService.uploadData({
+        'deviceId': _apiProvider.selectedDeviceId,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+        'navigation': _state.toJson(),
+      }).then((_) => debugPrint('☁️ Map Sync: Uploaded location to cloud ✅'))
+        .catchError((e) => debugPrint('☁️ Map Sync: Cloud upload FAILED: $e ❌'));
+    }
   }
 
   @override
   void dispose() {
     _msgSub?.cancel();
+    _cloudPollTimer?.cancel();
+    _positionSub?.cancel();
     super.dispose();
   }
 }

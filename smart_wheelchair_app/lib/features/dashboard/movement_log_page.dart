@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
-// Map-related imports removed; movement log page no longer uses flutter_map
+import 'package:provider/provider.dart';
+import '../../core/providers/api_provider.dart';
+import 'package:intl/intl.dart';
 
 class MovementLogPage extends StatelessWidget {
   const MovementLogPage({super.key});
@@ -8,117 +10,124 @@ class MovementLogPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Movement Log')),
-      // For now we only show the movement history list; map view removed per request.
-      body: _buildMovementHistory(),
-    );
-  }
-
-  Widget _buildMovementHistory() {
-    final movements = [
-      _Movement(
-        time: DateTime.now().subtract(const Duration(minutes: 30)),
-        type: MovementType.forward,
-        duration: const Duration(seconds: 45),
-        distance: 15.0,
-      ),
-      _Movement(
-        time: DateTime.now().subtract(const Duration(hours: 1)),
-        type: MovementType.turn,
-        duration: const Duration(seconds: 10),
-        angle: 90.0,
-      ),
-      _Movement(
-        time: DateTime.now().subtract(const Duration(hours: 2)),
-        type: MovementType.backward,
-        duration: const Duration(seconds: 20),
-        distance: 5.0,
-      ),
-      // Add more movements as needed
-    ];
-
-    return ListView.builder(
-      padding: const EdgeInsets.all(8),
-      itemCount: movements.length,
-      itemBuilder: (context, index) {
-        final movement = movements[index];
-        return Card(
-          margin: const EdgeInsets.symmetric(vertical: 4),
-          child: ListTile(
-            leading: _buildMovementIcon(movement.type),
-            title: Text(_getMovementDescription(movement)),
-            subtitle: Text(_formatTime(movement.time)),
-            trailing: Text(_formatDuration(movement.duration)),
+      appBar: AppBar(
+        title: const Text('Movement Log'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: () => context.read<ApiProvider>().fetchHistory(),
           ),
-        );
-      },
+        ],
+      ),
+      body: Consumer<ApiProvider>(
+        builder: (context, api, _) {
+          final history = List.from(api.sensorHistory);
+          
+          if (history.isEmpty) {
+            return const Center(
+              child: Text('No movement logs found for this device.'),
+            );
+          }
+
+          // Ensure sorting (newest first)
+          history.sort((a, b) {
+            final t1 = a['serverTimestamp'] ?? a['timestamp'] ?? 0;
+            final t2 = b['serverTimestamp'] ?? b['timestamp'] ?? 0;
+            return (t2 as int).compareTo(t1 as int);
+          });
+
+          return ListView.builder(
+            padding: const EdgeInsets.all(8),
+            itemCount: history.length,
+            itemBuilder: (context, index) {
+              final entry = history[index];
+              final motorStatus = entry['motorStatus'];
+              if (motorStatus == null) return const SizedBox.shrink();
+
+              final command = motorStatus['lastCommand'] ?? 'S';
+              final mode = motorStatus['mode'] ?? 'REMOTE';
+              final timestamp = entry['serverTimestamp'] ?? entry['timestamp'] ?? 0;
+              final time = DateTime.fromMillisecondsSinceEpoch(timestamp);
+
+              return Card(
+                margin: const EdgeInsets.symmetric(vertical: 4),
+                child: ListTile(
+                  leading: _buildMovementIcon(command, mode),
+                  title: Text(_getMovementDescription(command, mode)),
+                  subtitle: Text(DateFormat('HH:mm:ss').format(time)),
+                  trailing: Text(mode),
+                ),
+              );
+            },
+          );
+        },
+      ),
     );
   }
 
-  // Map view removed — movement log page only shows history now.
-
-  Widget _buildMovementIcon(MovementType type) {
+  Widget _buildMovementIcon(String command, String mode) {
     IconData icon;
     Color color;
 
-    switch (type) {
-      case MovementType.forward:
+    switch (command.toUpperCase()) {
+      case 'F':
+      case 'FORWARD':
         icon = FontAwesomeIcons.arrowUp;
         color = Colors.green;
-      case MovementType.backward:
+      case 'B':
+      case 'BACKWARD':
         icon = FontAwesomeIcons.arrowDown;
         color = Colors.orange;
-      case MovementType.turn:
-        icon = FontAwesomeIcons.arrowRotateRight;
+      case 'L':
+      case 'LEFT':
+        icon = FontAwesomeIcons.arrowLeft;
         color = Colors.blue;
+      case 'R':
+      case 'RIGHT':
+        icon = FontAwesomeIcons.arrowRight;
+        color = Colors.blue;
+      case 'S':
+      case 'STOP':
+      default:
+        icon = FontAwesomeIcons.circleStop;
+        color = Colors.red;
+    }
+
+    if (mode.toUpperCase() == 'VOICE') {
+      color = Colors.purple;
     }
 
     return CircleAvatar(
-      backgroundColor: color.withAlpha(51), // 0.2 * 255 ≈ 51
+      backgroundColor: color.withOpacity(0.2),
       child: FaIcon(icon, color: color, size: 16),
     );
   }
 
-  String _getMovementDescription(_Movement movement) {
-    switch (movement.type) {
-      case MovementType.forward:
-        return 'Moved forward ${movement.distance?.toStringAsFixed(1)} meters';
-      case MovementType.backward:
-        return 'Moved backward ${movement.distance?.toStringAsFixed(1)} meters';
-      case MovementType.turn:
-        return 'Turned $movement.angle degrees';
+  String _getMovementDescription(String command, String mode) {
+    String action;
+    switch (command.toUpperCase()) {
+      case 'F':
+      case 'FORWARD':
+        action = 'Moving Forward';
+      case 'B':
+      case 'BACKWARD':
+        action = 'Reversing';
+      case 'L':
+      case 'LEFT':
+        action = 'Turning Left';
+      case 'R':
+      case 'RIGHT':
+        action = 'Turning Right';
+      case 'S':
+      case 'STOP':
+        action = 'Stopped';
+      default:
+        action = 'Unknown Command';
     }
-  }
-
-  String _formatTime(DateTime time) {
-    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-  }
-
-  String _formatDuration(Duration duration) {
-    final seconds = duration.inSeconds;
-    if (seconds < 60) {
-      return '$seconds sec';
+    
+    if (mode.toUpperCase() == 'VOICE') {
+      return 'Voice: $action';
     }
-    final minutes = duration.inMinutes;
-    final remainingSeconds = seconds - (minutes * 60);
-    return '$minutes min $remainingSeconds sec';
+    return action;
   }
-}
-
-enum MovementType { forward, backward, turn }
-
-class _Movement {
-  final DateTime time;
-  final MovementType type;
-  final Duration duration;
-  final double? distance;
-  final double? angle;
-
-  _Movement({
-    required this.time,
-    required this.type,
-    required this.duration,
-    this.distance,
-    this.angle,
-  });
 }
