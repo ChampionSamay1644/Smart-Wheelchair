@@ -45,3 +45,6 @@ __pycache__/
 *.log
 .env
 .env.local
+# Data sensitive and experimental
+randoms/
+verify_connection.py

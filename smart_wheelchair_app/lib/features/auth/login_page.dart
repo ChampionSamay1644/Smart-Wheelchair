@@ -5,7 +5,6 @@ import '../../core/enums.dart';
 import '../../core/providers/auth_provider.dart';
 import '../../core/providers/api_provider.dart';
 import '../../core/services/user_cache_service.dart';
-import '../dashboard/guardian_info_page.dart';
 
 class LoginPage extends StatefulWidget {
   final UserRole role;
@@ -19,6 +18,7 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final _deviceIdController = TextEditingController();
   final _devicePasswordController = TextEditingController();
+  final _emailController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
 
   CachedProfile? _cachedProfile;
@@ -37,7 +37,8 @@ class _LoginPageState extends State<LoginPage> {
     if (profile != null) {
       setState(() {
         _cachedProfile = profile;
-        _deviceIdController.text = profile.id; // Cached device ID
+        _deviceIdController.text = profile.id;
+        _emailController.text = profile.email;
       });
     }
   }
@@ -46,6 +47,7 @@ class _LoginPageState extends State<LoginPage> {
   void dispose() {
     _deviceIdController.dispose();
     _devicePasswordController.dispose();
+    _emailController.dispose();
     super.dispose();
   }
 
@@ -54,13 +56,15 @@ class _LoginPageState extends State<LoginPage> {
 
     final deviceId = _deviceIdController.text.trim();
     final devicePassword = _devicePasswordController.text.trim();
+    final email = _emailController.text.trim();
 
-    debugPrint('🚀 UI LOGIN ATTEMPT: role=${widget.role}, deviceId=$deviceId');
+    debugPrint('🚀 UI LOGIN ATTEMPT: role=${widget.role}, deviceId=$deviceId, email=$email');
 
     final success = await context.read<AuthProvider>().login(
       deviceId,
       devicePassword,
       role: widget.role,
+      email: email,
     );
 
     if (!mounted) return;
@@ -76,7 +80,6 @@ class _LoginPageState extends State<LoginPage> {
 
         if (!mounted) return;
 
-        // Navigate to appropriate dashboard based on role
         String route = switch (widget.role) {
           UserRole.patient => '/patient_dashboard',
           UserRole.guardian => '/guardian_dashboard',
@@ -120,7 +123,6 @@ class _LoginPageState extends State<LoginPage> {
             ),
             const SizedBox(height: 24),
             
-            // PROFILE SWITCHER UI
             if (_cachedProfile != null && !_showManualLogin) ...[
               Container(
                 padding: const EdgeInsets.all(20),
@@ -145,7 +147,7 @@ class _LoginPageState extends State<LoginPage> {
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                     Text(
-                      'Device: ${_cachedProfile!.id}',
+                      'Email: ${_cachedProfile!.email}',
                       style: const TextStyle(color: Colors.grey),
                     ),
                     const SizedBox(height: 24),
@@ -160,12 +162,7 @@ class _LoginPageState extends State<LoginPage> {
                         fillColor: Colors.white,
                       ),
                       obscureText: true,
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Password is required to log in';
-                        }
-                        return null;
-                      },
+                      validator: (value) => (value == null || value.isEmpty) ? 'Password required' : null,
                     ),
                     const SizedBox(height: 16),
                     SizedBox(
@@ -177,7 +174,7 @@ class _LoginPageState extends State<LoginPage> {
                     ),
                     TextButton(
                       onPressed: () => setState(() => _showManualLogin = true),
-                      child: const Text('Wait, connect to another device'),
+                      child: const Text('Connect to another device'),
                     ),
                   ],
                 ),
@@ -185,56 +182,54 @@ class _LoginPageState extends State<LoginPage> {
               const SizedBox(height: 24),
             ] else ...[
               Text(
-                'Secure Device Authentication',
+                'Identity & Notifications',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(color: Colors.grey),
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _emailController,
+                decoration: const InputDecoration(
+                  labelText: 'Your Email',
+                  prefixIcon: Icon(Icons.email),
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.emailAddress,
+                validator: (value) => (value == null || value.isEmpty) ? 'Email required for alerts' : null,
+              ),
+              const SizedBox(height: 24),
+              Text(
+                'Device Authentication',
                 style: Theme.of(context).textTheme.titleSmall?.copyWith(color: Colors.grey),
               ),
               const SizedBox(height: 8),
               TextFormField(
                 controller: _deviceIdController,
                 decoration: const InputDecoration(
-                  labelText: 'Wheelchair Device ID',
-                  hintText: 'e.g. ALPHA_1',
+                  labelText: 'Device ID',
                   prefixIcon: Icon(Icons.qr_code_scanner),
                   border: OutlineInputBorder(),
                 ),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter Device ID';
-                  }
-                  return null;
-                },
+                validator: (value) => (value == null || value.isEmpty) ? 'Device ID required' : null,
               ),
               const SizedBox(height: 12),
               TextFormField(
                 controller: _devicePasswordController,
                 decoration: InputDecoration(
                   labelText: '${widget.role.displayName} Password',
-                  hintText: 'The secret key for this wheelchair',
-                  prefixIcon: const Icon(Icons.security),
+                  prefixIcon: const Icon(Icons.lock),
                   border: const OutlineInputBorder(),
                 ),
                 obscureText: true,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter Password';
-                  }
-                  return null;
-                },
+                validator: (value) => (value == null || value.isEmpty) ? 'Password required' : null,
               ),
               const SizedBox(height: 32),
               ElevatedButton(
-                onPressed: context.watch<AuthProvider>().isLoading
-                    ? null
-                    : _onLogin,
+                onPressed: context.watch<AuthProvider>().isLoading ? null : _onLogin,
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
                 child: context.watch<AuthProvider>().isLoading
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
+                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
                     : const Text('Connect & Login'),
               ),
             ],

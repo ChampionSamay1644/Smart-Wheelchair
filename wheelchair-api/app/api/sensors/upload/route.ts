@@ -44,23 +44,39 @@ export async function POST(request: NextRequest) {
         registeredAt: Date.now()
       });
     } else {
-      // Validate device-level authorization simply by requiring *either* password to be correct to upload
-      // Technically, physical wheelchair just uploads, but this ensures a stranger doesn't maliciously spam the DB.
-      if (metadata.patientPassword !== patientPassword && metadata.guardianPassword !== guardianPassword && metadata.password !== request.headers.get('X-Device-Password')) {
+      // FIX 401 BUG: Validate device-level authorization simply by requiring *any* known password to be correct.
+      // We check X-Patient-Password, X-Guardian-Password, AND the generic X-Device-Password.
+      const devicePassword = request.headers.get('X-Device-Password');
+      const isAuthorized = 
+        metadata.patientPassword === patientPassword || 
+        metadata.guardianPassword === guardianPassword || 
+        metadata.patientPassword === devicePassword || 
+        metadata.guardianPassword === devicePassword ||
+        metadata.password === devicePassword;
+
+      if (!isAuthorized) {
          console.warn(`Unauthorized upload attempt for ${deviceId}`);
          return NextResponse.json({ error: 'Unauthorized: Incorrect device credentials' }, { status: 401 });
       }
     }
 
-    // Add server timestamp
+    // Add server timestamp and calculated health data
+    const pulse = max30100?.ir ? (max30100.ir / 100) : null;
+    const spo2 = max30100?.red ? (max30100.red / 100) : null;
+    
     const payload = {
       ...data,
       deviceId,
+      max30100: {
+        ...max30100,
+        pulse,
+        spo2
+      },
       serverTimestamp: Date.now(),
     };
 
-    // Update current sensor data
-    console.log(`📡 Incoming from ${deviceId}: Pulse: ${max30100?.ir / 100}, SpO2: ${max30100?.red / 100}`);
+    // Update current sensor data in Firebase
+    console.log(`📡 [UPLOAD] from ${deviceId}: Pulse: ${pulse?.toFixed(1) ?? 'N/A'}, SpO2: ${spo2?.toFixed(1) ?? 'N/A'}, Temp: ${dht11?.temperature ?? 'N/A'}°C`);
     await deviceRef.child('current').update(payload);
 
     // Add to history (keep last 100 entries)
@@ -111,29 +127,42 @@ export async function POST(request: NextRequest) {
       };
       await alertRef.push(newAlert);
 
-      // 2. Fetch Guardian email to notify
+      // 2. Fetch Guardian email to notify -优先使用metadata里存的email
+      const targetEmails: string[] = [];
+      if (metadata && metadata.guardianEmail) {
+        targetEmails.push(metadata.guardianEmail);
+      }
+
+      // Fallback: check active sessions
       const sessionSnapshot = await db.ref(`devices/${deviceId}/sessions`).orderByChild('role').equalTo('guardian').once('value');
       const sessions = sessionSnapshot.val();
       
       if (sessions) {
-        // Send email to all connected guardians
         for (const key in sessions) {
-          const guardian = sessions[key];
-          if (guardian.email || (guardian.name && guardian.name.includes('@'))) {
-            const targetEmail = guardian.email || guardian.name;
-            
-            // Trigger internal email API
-            fetch(`${request.nextUrl.origin}/api/notifications/email`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                type: 'health_alert',
-                targetEmail: targetEmail,
-                patientName: metadata?.patientName || deviceId,
-                contextEmail: alertMessage
-              })
-            }).catch(err => console.error("Failed to trigger alert email:", err));
-          }
+           const guardian = sessions[key];
+           const email = guardian.email || (guardian.name && guardian.name.includes('@') ? guardian.name : null);
+           if (email && !targetEmails.includes(email)) {
+             targetEmails.push(email);
+           }
+        }
+      }
+
+      if (targetEmails.length > 0) {
+        for (const targetEmail of targetEmails) {
+          console.log(`📨 [Email Trigger] Attempting Health Alert -> ${targetEmail}`);
+          fetch(`${request.nextUrl.origin}/api/notifications/email`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'health_alert',
+              targetEmail: targetEmail,
+              patientName: metadata?.patientName || metadata?.patientEmail || deviceId,
+              contextEmail: alertMessage
+            })
+          })
+          .then(r => r.json())
+          .then(d => console.log('📨 [Email Response] Success:', d))
+          .catch(err => console.error("❌ [Email Error] Health Alert:", err));
         }
       }
     }
@@ -169,8 +198,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Device not found or not registered' }, { status: 404 });
     }
 
-    if (metadata.password !== password) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const isAuthorized = 
+      metadata.patientPassword === password || 
+      metadata.guardianPassword === password ||
+      metadata.password === password;
+
+    if (!isAuthorized) {
+      return NextResponse.json({ error: 'Unauthorized: Incorrect device credentials' }, { status: 401 });
     }
 
     const history = searchParams.get('history') === 'true';

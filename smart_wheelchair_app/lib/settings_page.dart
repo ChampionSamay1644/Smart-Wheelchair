@@ -100,15 +100,6 @@ class SettingsPage extends StatelessWidget {
                 },
               ),
             ],
-            _buildSettingItem(
-              context,
-              tr(context, 'battery'),
-              Icons.battery_full,
-              'View battery status',
-              onTap: () {
-                // ... battery logic
-              },
-            ),
           ]),
           const SizedBox(height: 20),
           _buildCloudSettings(context),

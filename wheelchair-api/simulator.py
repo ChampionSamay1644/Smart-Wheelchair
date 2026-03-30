@@ -19,20 +19,18 @@ import requests
 class WheelchairSimulator:
     """Simulates sensor data from a smart wheelchair"""
     
-    def __init__(self, api_url: str, device_id: str = "simulator-001", patient_password: str = "pat_123", guardian_password: str = "gua_123", no_motor: bool = False):
+    def __init__(self, api_url: str, device_id: str = "simulator-001", password: str = "pat_123", no_motor: bool = False):
         """
         Initialize the simulator
         
         Args:
             api_url: Base URL of the Next.js API
             device_id: Unique device identifier
-            patient_password: Password for patient app login
-            guardian_password: Password for guardian app login
+            password: Device password (used for both patient and guardian login)
         """
         self.api_url = api_url.rstrip('/')
         self.device_id = device_id
-        self.patient_password = patient_password
-        self.guardian_password = guardian_password
+        self.password = password
         self.no_motor = no_motor
         self.sim_gps = False # Will be set by main
         self.upload_endpoint = f"{self.api_url}/api/sensors/upload"
@@ -46,8 +44,7 @@ class WheelchairSimulator:
         self.session.headers.update({
             'Content-Type': 'application/json',
             'X-Device-Id': self.device_id,
-            'X-Patient-Password': self.patient_password,
-            'X-Guardian-Password': self.guardian_password
+            'X-Device-Password': self.password
         })
         
         # Simulation state
@@ -60,9 +57,8 @@ class WheelchairSimulator:
         self.red_value = 4500
         self.motor_commands = ['F', 'B', 'L', 'R', 'S']
         self.current_command = 'S'
-        self.mode = 'REMOTE'
+        self.mode = 'MANUAL'
         self.obstacle = None
-        self.battery_level = 100.0
         
     def check_status(self) -> Dict[str, Any]:
         """Check API status and killswitch"""
@@ -130,15 +126,12 @@ class WheelchairSimulator:
         # Occasionally change motor command
         if random.random() < 0.2:  # 20% chance to change movement
             self.current_command = random.choice(self.motor_commands)
+            # Assign a realistic mode based on the command
+            self.mode = random.choice(['JOYSTICK', 'VOICE', 'MANUAL'])
         elif random.random() < 0.4: # 40% chance to keep moving
             pass # Keep current_command
         else:
             self.current_command = 'S' # 40% chance to stop
-        
-        # Simulate battery drain (faster if moving)
-        drain = 0.05 if self.current_command == 'S' else 0.15
-        self.battery_level -= drain
-        self.battery_level = max(0.0, self.battery_level)
         
         # Build sensor data payload
         payload = {
@@ -173,8 +166,7 @@ class WheelchairSimulator:
         if not self.no_motor:
             payload["motorStatus"] = {
                 "lastCommand": self.current_command,
-                "mode": self.mode,
-                "battery": round(self.battery_level, 1)
+                "mode": self.mode
             }
         
         return payload
@@ -278,11 +270,13 @@ class WheelchairSimulator:
                 status_icon = "✅" if success else "❌"
                 motor_val = data['motorStatus']['lastCommand'] if 'motorStatus' in data else "Disabled"
                 
+                pulse = data['max30100']['ir'] / 100 if 'max30100' in data else 0
+                spo2 = data['max30100']['red'] / 100 if 'max30100' in data else 0
                 gps_str = f"{self.lat:.5f},{self.lng:.5f}" if self.sim_gps else "Off"
                 
                 print(f"{status_icon} Upload #{upload_count:04d} | "
                       f"GPS: {gps_str} | "
-                      f"Battery: {self.battery_level:.1f}% | "
+                      f"Pulse: {pulse:.0f}bpm | SpO2: {spo2:.0f}% | "
                       f"Temp: {data['dht11']['temperature']:.1f}°C | "
                       f"Motor: {motor_val}")
                 
@@ -322,14 +316,9 @@ def main():
         help='Device identifier (default: TEST_001)'
     )
     parser.add_argument(
-        '--patient-password',
+        '--password',
         default='pat_123',
-        help='Patient password (default: pat_123)'
-    )
-    parser.add_argument(
-        '--guardian-password',
-        default='gua_123',
-        help='Guardian password (default: gua_123)'
+        help='Device password for both patient and guardian login (default: pat_123)'
     )
     parser.add_argument(
         '--interval',
@@ -360,8 +349,7 @@ def main():
     simulator = WheelchairSimulator(
         api_url=args.url,
         device_id=args.device_id,
-        patient_password=args.patient_password,
-        guardian_password=args.guardian_password,
+        password=args.password,
         no_motor=args.no_motor
     )
     simulator.sim_gps = args.gps

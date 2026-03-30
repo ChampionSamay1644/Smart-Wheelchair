@@ -1,6 +1,5 @@
-// ignore_for_file: avoid_print
-
 import 'dart:async';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:smart_wheelchair_app/features/outdoor_navigation/outdoor_navigation_page.dart';
@@ -143,6 +142,63 @@ class _MyHomePageState extends State<MyHomePage> {
   double _emergencyProgress = 0.0;
   Timer? _emergencyTimer;
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkProfileCompleteness();
+      context.read<ApiProvider>().reportPresence('patient');
+      _startBackgroundSync();
+    });
+  }
+
+  Future<void> _checkProfileCompleteness() async {
+    final api = context.read<ApiProvider>();
+    if (api.selectedDeviceId == null) return;
+
+    try {
+      final info = await ApiService().fetchMedicalInfo(api.selectedDeviceId!);
+      if (mounted && (info['name'] == null || info['name'].toString().isEmpty)) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (c) => AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.medical_services_outlined, color: Colors.blue),
+                SizedBox(width: 8),
+                Text('Medical Setup'),
+              ],
+            ),
+            content: const Text(
+                'Welcome! Please take a moment to fill in your medical information. This is critical for emergency services to help you effectively.'
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(c),
+                child: const Text('LATER'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(c);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (c) => const MedicalInfoPage(isInitialSetup: true),
+                    ),
+                  );
+                },
+                child: const Text('SETUP NOW'),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error checking patient profile: $e');
+    }
+  }
+
   void _startEmergencyHold() {
     setState(() {
       _isHoldingEmergency = true;
@@ -150,7 +206,7 @@ class _MyHomePageState extends State<MyHomePage> {
     });
     _emergencyTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) async {
       setState(() {
-        _emergencyProgress += 0.01; // 50ms * 100 = 5s
+        _emergencyProgress += 1/60; // 50ms * 60 = 3s
       });
       if (_emergencyProgress >= 1.0) {
         _emergencyTimer?.cancel();
@@ -170,14 +226,39 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _triggerEmergency() async {
     final messenger = ScaffoldMessenger.of(context);
     await EmergencyStopService.trigger();
-    // Also create a backend alert if connected
+    
+    // Write emergency alert directly to Firebase (bypasses Vercel API)
     final apiProvider = Provider.of<ApiProvider>(context, listen: false);
-    if (apiProvider.selectedDeviceId != null) {
-      await ApiService().createAlert(
-        apiProvider.selectedDeviceId!,
-        'Emergency Button',
-        'Patient triggered emergency stop (5s hold verified)',
-      );
+    final deviceId = apiProvider.selectedDeviceId;
+    if (deviceId != null) {
+      final alertRef = FirebaseDatabase.instance.ref('devices/$deviceId/alerts');
+      await alertRef.push().set({
+        'title': '🚨 Emergency Button',
+        'message': 'Patient triggered emergency stop (3s hold verified)',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+        'read': false,
+        'severity': 'critical',
+      });
+      print('🚨 Emergency alert written to Firebase for device: $deviceId');
+
+      // 🔥 ALSO TRIGGER EMAIL NOTIFICATION
+      try {
+        final medicalInfo = await ApiService().fetchMedicalInfo(deviceId);
+        final patientName = medicalInfo['name'] ?? 'The Patient';
+        final guardianEmail = medicalInfo['guardian']?['email'];
+
+        if (guardianEmail != null && guardianEmail.isNotEmpty) {
+           print('📨 Triggering Emergency Email to Guardian: $guardianEmail');
+           await ApiService().sendHealthAlertEmail(
+             targetEmail: guardianEmail,
+             type: 'health_alert', // Reusing health_alert template for emergency
+             patientName: patientName,
+             vitalInfo: 'SOS: Patient pressed Emergency Trigger button!',
+           );
+        }
+      } catch (e) {
+        print('❌ Failed to trigger emergency email: $e');
+      }
     }
     
     if (!mounted) return;
@@ -196,14 +277,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Timer? _syncTimer;
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<ApiProvider>().reportPresence('patient');
-      _startBackgroundSync();
-    });
-  }
+
 
   void _startBackgroundSync() {
     final syncService = context.read<SyncService>();

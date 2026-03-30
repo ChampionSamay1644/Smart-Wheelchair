@@ -55,7 +55,17 @@ class MovementLogPage extends StatelessWidget {
                   leading: _buildMovementIcon(command, mode),
                   title: Text(_getMovementDescription(command, mode)),
                   subtitle: Text(DateFormat('HH:mm:ss').format(time)),
-                  trailing: Text(mode),
+                  trailing: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _getModeColor(mode).withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      _getModeLabel(mode),
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: _getModeColor(mode)),
+                    ),
+                  ),
                 ),
               );
             },
@@ -103,6 +113,24 @@ class MovementLogPage extends StatelessWidget {
     );
   }
 
+  Color _getModeColor(String mode) {
+    switch (mode.toUpperCase()) {
+      case 'VOICE': return Colors.purple;
+      case 'JOYSTICK': return Colors.blue;
+      case 'MANUAL': return Colors.green;
+      default: return Colors.grey;
+    }
+  }
+
+  String _getModeLabel(String mode) {
+    switch (mode.toUpperCase()) {
+      case 'VOICE': return '🎙 Voice';
+      case 'JOYSTICK': return '🕹 Joystick';
+      case 'MANUAL': return '🖐 Manual';
+      default: return mode;
+    }
+  }
+
   String _getMovementDescription(String command, String mode) {
     String action;
     switch (command.toUpperCase()) {
@@ -123,10 +151,6 @@ class MovementLogPage extends StatelessWidget {
         action = 'Stopped';
       default:
         action = 'Unknown Command';
-    }
-    
-    if (mode.toUpperCase() == 'VOICE') {
-      return 'Voice: $action';
     }
     return action;
   }

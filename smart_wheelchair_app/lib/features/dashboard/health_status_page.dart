@@ -51,7 +51,8 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
                     const SizedBox(height: 24),
                     _buildVitalCard(
                       'Pulse Rate',
-                      max30['ir'] != null ? (max30['ir'] / 100).toStringAsFixed(0) : '--',
+                      max30['pulse'] != null ? max30['pulse'].toStringAsFixed(0) :
+                        (max30['ir'] != null ? (max30['ir'] / 100).toStringAsFixed(0) : '--'),
                       'BPM',
                       FontAwesomeIcons.heartPulse,
                       Colors.red,
@@ -60,7 +61,8 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
                     const SizedBox(height: 16),
                     _buildVitalCard(
                       'Blood Oxygen',
-                      max30['red'] != null ? (max30['red'] / 100).toStringAsFixed(0) : '--',
+                      max30['spo2'] != null ? max30['spo2'].toStringAsFixed(0) :
+                        (max30['red'] != null ? (max30['red'] / 100).toStringAsFixed(0) : '--'),
                       '%',
                       FontAwesomeIcons.circleExclamation,
                       Colors.blueAccent,
@@ -295,29 +297,30 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
     final apiProvider = Provider.of<ApiProvider>(context, listen: false);
     final is7d = apiProvider.currentTimeframe == '7d';
     
-    // Create a stable seed based on Device ID and timeframe
-    final deviceSeed = apiProvider.selectedDeviceId?.hashCode ?? 0;
-    final timeframeSeed = is7d ? _selectedWeek : (_selectedMonthOffset + 10);
-    final typeSeed = type == 'pulse' ? 100 : (type == 'spo2' ? 300 : 200);
+    // Use a TRULY FIXED seed: device + timeframe selection + type only.
+    // Do NOT include any time-based values so the graph never changes.
+    final deviceSeed = (apiProvider.selectedDeviceId ?? 'default').codeUnits.fold(0, (a, b) => a + b);
+    final timeframeSeed = is7d ? (_selectedWeek * 7) : (_selectedMonthOffset * 30 + 100);
+    final typeSeed = type == 'pulse' ? 1000 : (type == 'spo2' ? 3000 : 2000);
     
     final seed = deviceSeed + timeframeSeed + typeSeed;
-    final rand = math.Random(seed);
+    final rand = math.Random(seed); // Seeded = always same output
     
     int points = is7d ? 7 : 30;
-    double baseVal = (type == 'pulse' ? 70.0 : (type == 'spo2' ? 95.0 : 36.2));
-    double variance = (type == 'pulse' ? 12.0 : (type == 'spo2' ? 4.0 : 1.2));
+    double baseVal = (type == 'pulse' ? 72.0 : (type == 'spo2' ? 96.0 : 36.5));
+    double variance = (type == 'pulse' ? 10.0 : (type == 'spo2' ? 3.0 : 0.8));
 
     return List.generate(points, (i) {
-        // Add a bit of 'trend' to make it look realistic
-        final trend = i * 0.1; 
         return {
             'max30100': {
-              'ir': (baseVal + (rand.nextDouble() * variance) + trend) * 100,
-              'red': (98.0 - (rand.nextDouble() * 5.0)) * 100,
+              'ir': ((baseVal + rand.nextDouble() * variance) * 100).round(),
+              'red': ((97.0 - rand.nextDouble() * 4.0) * 100).round(),
+              'pulse': baseVal + rand.nextDouble() * variance,
+              'spo2': 97.0 - rand.nextDouble() * 4.0,
             },
             'dht11': {
-                'temperature': baseVal + (rand.nextDouble() * variance) + (trend * 0.1),
-                'humidity': 45.0 + (rand.nextDouble() * 25),
+                'temperature': 36.0 + rand.nextDouble() * 1.5,
+                'humidity': 50.0 + rand.nextDouble() * 20,
             }
         };
     });

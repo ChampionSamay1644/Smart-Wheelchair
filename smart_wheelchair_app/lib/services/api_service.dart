@@ -116,6 +116,62 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> fetchMedicalInfo(String deviceId) async {
+    if (_useMockData) {
+      return {
+        'name': 'John Doe (Mock)',
+        'age': '45',
+        'bloodGroup': 'O+',
+        'allergies': 'Peanuts, Penicillin',
+        'conditions': 'Hypertension',
+        'emergencyContact': '+1234567890',
+      };
+    }
+    if (_baseUrl == null) throw Exception('API URL not configured');
+    final response = await http.get(
+      Uri.parse('$_baseUrl/api/medical-info').replace(queryParameters: {'deviceId': deviceId}),
+      headers: _getHeaders(),
+    );
+    if (response.statusCode == 200) return jsonDecode(response.body);
+    return {};
+  }
+
+  Future<void> updateMedicalInfo(String deviceId, Map<String, dynamic> info) async {
+    if (_useMockData) return;
+    if (_baseUrl == null) throw Exception('API URL not configured');
+    final response = await http.post(
+      Uri.parse('$_baseUrl/api/medical-info'),
+      headers: _getHeaders(),
+      body: jsonEncode({'deviceId': deviceId, ...info}),
+    );
+    if (response.statusCode != 200) throw Exception('Failed to update medical info');
+  }
+
+  Future<void> sendHealthAlertEmail({
+    required String targetEmail,
+    required String type,
+    required String patientName,
+    required String vitalInfo,
+  }) async {
+    if (_baseUrl == null) return;
+    print('📨 [API Service] Triggering Health Alert Email -> $targetEmail');
+    final response = await http.post(
+      Uri.parse('$_baseUrl/api/notifications/email'),
+      headers: _getHeaders(),
+      body: jsonEncode({
+        'type': type,
+        'targetEmail': targetEmail,
+        'patientName': patientName,
+        'vitalInfo': vitalInfo,
+      }),
+    );
+    if (response.statusCode != 200) {
+      print('❌ [API Service] Email trigger failed: ${response.statusCode} - ${response.body}');
+    } else {
+      print('✅ [API Service] Email trigger success');
+    }
+  }
+
   Future<List<dynamic>> fetchSensorHistory(String deviceId, {String timeframe = '24h'}) async {
     // The user explicitly requested Weeks and Months to be heavily populated with DISTINCT static generated data
     if (timeframe == '7d' || timeframe == '30d' || timeframe == '4m' || timeframe == 'week' || timeframe == 'month') {
@@ -226,33 +282,7 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> fetchMedicalInfo(String deviceId) async {
-    if (_useMockData) {
-      return {
-        'name': 'John Doe (Mock)',
-        'age': '45',
-        'bloodGroup': 'O+',
-        'allergies': 'Peanuts, Penicillin',
-        'conditions': 'Hypertension',
-        'emergencyContact': '+1234567890',
-      };
-    }
-    if (_baseUrl == null) throw Exception('API URL not configured');
 
-    final response = await http.get(
-      Uri.parse('$_baseUrl/api/medical-info').replace(
-        queryParameters: {'deviceId': deviceId},
-      ),
-    );
-
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
-    } else if (response.statusCode == 404) {
-      return {};
-    } else {
-      throw Exception('Failed to fetch medical info: ${response.statusCode}');
-    }
-  }
 
   Future<void> syncUserToDatabase(String uid, Map<String, dynamic> userData) async {
     if (_useMockData) return;
@@ -268,9 +298,19 @@ class ApiService {
     );
   }
 
-  Future<Map<String, dynamic>> loginWithDevice(String deviceId, String password, String role) async {
+  Future<Map<String, dynamic>> loginWithDevice(String deviceId, String password, String role, {String? email}) async {
     if (_useMockData) {
-      return {'success': true, 'role': role, 'deviceId': deviceId};
+      return {
+        'success': true, 
+        'role': role, 
+        'deviceId': deviceId,
+        'user': {
+          'id': deviceId,
+          'name': role == 'patient' ? 'Patient' : 'Guardian',
+          'email': email ?? 'test@example.com',
+          'role': role
+        }
+      };
     }
     if (_baseUrl == null) throw Exception('API URL not configured');
 
@@ -281,6 +321,7 @@ class ApiService {
         'deviceId': deviceId,
         'password': password,
         'role': role,
+        'email': email,
       }),
     );
 
@@ -307,23 +348,7 @@ class ApiService {
     return response.statusCode == 200;
   }
 
-  Future<void> updateMedicalInfo(String deviceId, Map<String, dynamic> info) async {
-    if (_useMockData) return;
-    if (_baseUrl == null) throw Exception('API URL not configured');
 
-    final response = await http.post(
-      Uri.parse('$_baseUrl/api/medical-info'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'deviceId': deviceId,
-        'info': info,
-      }),
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception('Failed to update medical info: ${response.statusCode}');
-    }
-  }
 
   // Alerts API
   Future<List<dynamic>> fetchAlerts(String deviceId) async {

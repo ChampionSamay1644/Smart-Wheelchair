@@ -66,12 +66,17 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<bool> login(String deviceId, String password, {UserRole role = UserRole.patient}) async {
+  Future<bool> login(String deviceId, String password, {UserRole role = UserRole.patient, String? email}) async {
     _loading = true;
     notifyListeners();
 
     try {
-      final response = await _apiService.loginWithDevice(deviceId, password, role.toString().split('.').last);
+      final response = await _apiService.loginWithDevice(
+        deviceId, 
+        password, 
+        role.toString().split('.').last,
+        email: email
+      );
       
       final user = AuthUser(
         id: response['user']['id'],

@@ -10,6 +10,7 @@ import 'notification_panel.dart';
 import '../outdoor_navigation/map_widget.dart';
 import 'package:latlong2/latlong.dart';
 import '../../core/services/sync_service.dart';
+import '../../services/api_service.dart';
 import 'guardian_info_page.dart';
 
 class GuardianDashboard extends StatefulWidget {
@@ -29,7 +30,57 @@ class _GuardianDashboardState extends State<GuardianDashboard> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ApiProvider>().reportPresence('guardian');
       _setupRealtimeSync();
+      _checkProfileCompleteness();
     });
+  }
+
+  Future<void> _checkProfileCompleteness() async {
+    final api = context.read<ApiProvider>();
+    if (api.selectedDeviceId == null) return;
+    
+    try {
+      final info = await ApiService().fetchMedicalInfo(api.selectedDeviceId!);
+      final guardian = info['guardian'] ?? {};
+      
+      if (mounted && (guardian['name'] == null || guardian['name'].toString().isEmpty)) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (c) => AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.shield_outlined, color: Colors.blue),
+                SizedBox(width: 8),
+                Text('Profile Setup'),
+              ],
+            ),
+            content: const Text(
+                'Please complete your guardian profile information to ensure patient safety and proper emergency coordination.'
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(c),
+                child: const Text('LATER'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(c);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (c) => const GuardianInfoPage(isInitialSetup: true),
+                    ),
+                  );
+                },
+                child: const Text('SETUP NOW'),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error checking guardian profile: $e');
+    }
   }
 
   void _setupRealtimeSync() {
@@ -59,7 +110,7 @@ class _GuardianDashboardState extends State<GuardianDashboard> {
           // Header layer
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
+            padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + 12, 16, 16),
             decoration: BoxDecoration(
               color: Theme.of(context).primaryColor,
               borderRadius: const BorderRadius.only(
@@ -67,11 +118,8 @@ class _GuardianDashboardState extends State<GuardianDashboard> {
                 bottomRight: Radius.circular(20),
               ),
             ),
-            child: SafeArea(
-              top: false,
-              bottom: false,
-              child: Row(
-                children: [
+            child: Row(
+              children: [
                   // App logo + title
                   Image.asset(
                     'assets/logo.jpg',
@@ -103,7 +151,6 @@ class _GuardianDashboardState extends State<GuardianDashboard> {
                       ],
                     ),
                   ),
-                  const Spacer(),
                   IconButton(
                     icon: const Icon(Icons.refresh, color: Colors.white),
                     tooltip: 'Refresh',
@@ -173,7 +220,6 @@ class _GuardianDashboardState extends State<GuardianDashboard> {
                 ],
               ),
             ),
-          ),
 
           // Main screen layer with map
           Expanded(
@@ -252,40 +298,6 @@ class _GuardianDashboardState extends State<GuardianDashboard> {
                                         'Patient Live',
                                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                                       ),
-                                      const SizedBox(width: 12),
-                                      const VerticalDivider(width: 1, thickness: 1, indent: 4, endIndent: 4),
-                                      const SizedBox(width: 12),
-                                      Consumer<ApiProvider>(
-                                        builder: (context, api, _) {
-                                          final battery = (api.latestSensorData['motorStatus']?['battery'] ?? 100.0) as double;
-                                          Color batteryColor = Colors.green;
-                                          IconData batteryIcon = Icons.battery_full;
-                                          
-                                          if (battery < 15) {
-                                            batteryColor = Colors.red;
-                                            batteryIcon = Icons.battery_alert;
-                                          } else if (battery < 40) {
-                                            batteryColor = Colors.orange;
-                                            batteryIcon = Icons.battery_3_bar;
-                                          }
-                                          
-                                          return Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Icon(batteryIcon, size: 14, color: batteryColor),
-                                              const SizedBox(width: 4),
-                                              Text(
-                                                '${battery.toStringAsFixed(0)}%',
-                                                style: TextStyle(
-                                                  fontSize: 12, 
-                                                  fontWeight: FontWeight.bold,
-                                                  color: batteryColor,
-                                                ),
-                                              ),
-                                            ],
-                                          );
-                                        },
-                                      ),
                                     ],
                                   ),
                                 ),
@@ -317,8 +329,8 @@ class _GuardianDashboardState extends State<GuardianDashboard> {
                           MaterialPageRoute(builder: (c) => const GuardianInfoPage()),
                         );
                       },
-                      icon: const Icon(Icons.edit_note, size: 20),
-                      label: const Text('Edit Guardian Profile'),
+                      icon: const Icon(Icons.account_circle_outlined, size: 20),
+                      label: const Text('View Guardian Profile'),
                     ),
                   ),
 
@@ -389,15 +401,13 @@ class _GuardianDashboardState extends State<GuardianDashboard> {
           );
         }
 
-        // Precedence: Live Firebase Status > API Polling Data
-        final pulse = _realtimeStatus?['heartRate']?.toStringAsFixed(0) ?? 
-                    (max30100['ir'] != null ? (max30100['ir'] / 100).toStringAsFixed(0) : '--');
-        
-        final spo2 = _realtimeStatus?['spo2']?.toStringAsFixed(0) != null ? '${_realtimeStatus?['spo2']?.toStringAsFixed(0)}%' : 
-                    (max30100['red'] != null ? '${(max30100['red'] / 100).toStringAsFixed(0)}%' : '--%');
-        
-        final temp = _realtimeStatus?['temperature']?.toStringAsFixed(1) != null ? '${_realtimeStatus?['temperature']?.toStringAsFixed(1)}°C' : 
-                    '${dht11['temperature'] ?? '--'}°C';
+        // Read processed fields from backend (if deployed). Fallback to raw ir/red values.
+        final rawPulse = max30100['pulse'] ?? (max30100['ir'] != null ? (max30100['ir'] / 100.0) : null);
+        final rawSpo2 = max30100['spo2'] ?? (max30100['red'] != null ? (max30100['red'] / 100.0) : null);
+
+        final pulse = rawPulse != null ? (rawPulse as num).toStringAsFixed(0) : '--';
+        final spo2 = rawSpo2 != null ? '${(rawSpo2 as num).toStringAsFixed(0)}%' : '--%';
+        final temp = dht11['temperature'] != null ? '${(dht11['temperature'] as num).toStringAsFixed(1)}°C' : '--°C';
 
         return Card(
           child: Padding(
