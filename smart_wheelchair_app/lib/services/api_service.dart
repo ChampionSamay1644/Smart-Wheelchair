@@ -142,7 +142,10 @@ class ApiService {
     final response = await http.post(
       Uri.parse('$_baseUrl/api/medical-info'),
       headers: _getHeaders(),
-      body: jsonEncode({'deviceId': deviceId, ...info}),
+      body: jsonEncode({
+        'deviceId': deviceId,
+        'info': info,
+      }),
     );
     if (response.statusCode != 200) throw Exception('Failed to update medical info');
   }
@@ -154,7 +157,7 @@ class ApiService {
     required String vitalInfo,
   }) async {
     if (_baseUrl == null) return;
-    print('📨 [API Service] Triggering Health Alert Email -> $targetEmail');
+    debugPrint('📨 [API Service] Triggering Health Alert Email -> $targetEmail');
     final response = await http.post(
       Uri.parse('$_baseUrl/api/notifications/email'),
       headers: _getHeaders(),
@@ -166,9 +169,9 @@ class ApiService {
       }),
     );
     if (response.statusCode != 200) {
-      print('❌ [API Service] Email trigger failed: ${response.statusCode} - ${response.body}');
+      debugPrint('❌ [API Service] Email trigger failed: ${response.statusCode} - ${response.body}');
     } else {
-      print('✅ [API Service] Email trigger success');
+      debugPrint('✅ [API Service] Email trigger success');
     }
   }
 

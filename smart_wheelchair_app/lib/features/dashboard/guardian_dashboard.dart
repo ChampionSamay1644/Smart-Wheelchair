@@ -8,7 +8,6 @@ import 'package:provider/provider.dart';
 import '../../core/providers/alert_provider.dart';
 import 'notification_panel.dart';
 import '../outdoor_navigation/map_widget.dart';
-import 'package:latlong2/latlong.dart';
 import '../../core/services/sync_service.dart';
 import '../../services/api_service.dart';
 import 'guardian_info_page.dart';
@@ -21,7 +20,6 @@ class GuardianDashboard extends StatefulWidget {
 }
 
 class _GuardianDashboardState extends State<GuardianDashboard> {
-  Map<String, dynamic>? _realtimeStatus;
   StreamSubscription? _statusSubscription;
 
   @override
@@ -90,7 +88,7 @@ class _GuardianDashboardState extends State<GuardianDashboard> {
     _statusSubscription = syncService.listenToPatientStatus('test_patient_123').listen((status) {
       if (mounted) {
         setState(() {
-          _realtimeStatus = status;
+          // Status updated
         });
       }
     });
@@ -276,10 +274,10 @@ class _GuardianDashboardState extends State<GuardianDashboard> {
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                                   decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.9),
+                                    color: Colors.white.withValues(alpha: 0.9),
                                     borderRadius: BorderRadius.circular(20),
                                     boxShadow: [
-                                      BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 4),
+                                      BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4),
                                     ],
                                   ),
                                   child: Row(

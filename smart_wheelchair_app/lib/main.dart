@@ -11,7 +11,6 @@ import 'core/providers/bluetooth_provider.dart';
 import 'core/providers/outdoor_navigation_provider.dart';
 import 'core/providers/emergency_contacts_provider.dart';
 import 'core/providers/alert_provider.dart';
-import 'features/dashboard/notification_panel.dart';
 import 'bluetooth_connection_page.dart';
 import 'widgets/connection_dialog.dart';
 import 'features/auth/splash_screen.dart';
@@ -33,6 +32,7 @@ import 'core/providers/api_provider.dart';
 import 'core/enums.dart';
 import 'features/auth/login_page.dart';
 import 'core/services/sync_service.dart';
+import 'features/outdoor_navigation/global_navigation_overlay.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -91,6 +91,15 @@ class MyApp extends StatelessWidget {
           ),
         ),
       ),
+      builder: (context, child) {
+        return Stack(
+          children: [
+            if (child != null) child,
+            // Only patient currently uses pip outdoor nav rendering, though it could be guarded by UserRole check
+            const GlobalNavigationOverlay(),
+          ],
+        );
+      },
       initialRoute: '/',
       routes: {
         '/': (context) => const SplashScreen(),
@@ -225,10 +234,11 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _triggerEmergency() async {
     final messenger = ScaffoldMessenger.of(context);
+    final apiProvider = Provider.of<ApiProvider>(context, listen: false);
+    
     await EmergencyStopService.trigger();
     
     // Write emergency alert directly to Firebase (bypasses Vercel API)
-    final apiProvider = Provider.of<ApiProvider>(context, listen: false);
     final deviceId = apiProvider.selectedDeviceId;
     if (deviceId != null) {
       final alertRef = FirebaseDatabase.instance.ref('devices/$deviceId/alerts');
@@ -239,7 +249,7 @@ class _MyHomePageState extends State<MyHomePage> {
         'read': false,
         'severity': 'critical',
       });
-      print('🚨 Emergency alert written to Firebase for device: $deviceId');
+      debugPrint('🚨 Emergency alert written to Firebase for device: $deviceId');
 
       // 🔥 ALSO TRIGGER EMAIL NOTIFICATION
       try {
@@ -248,7 +258,7 @@ class _MyHomePageState extends State<MyHomePage> {
         final guardianEmail = medicalInfo['guardian']?['email'];
 
         if (guardianEmail != null && guardianEmail.isNotEmpty) {
-           print('📨 Triggering Emergency Email to Guardian: $guardianEmail');
+           debugPrint('📨 Triggering Emergency Email to Guardian: $guardianEmail');
            await ApiService().sendHealthAlertEmail(
              targetEmail: guardianEmail,
              type: 'health_alert', // Reusing health_alert template for emergency
@@ -257,7 +267,7 @@ class _MyHomePageState extends State<MyHomePage> {
            );
         }
       } catch (e) {
-        print('❌ Failed to trigger emergency email: $e');
+        debugPrint('❌ Failed to trigger emergency email: $e');
       }
     }
     

@@ -58,7 +58,7 @@ class MovementLogPage extends StatelessWidget {
                   trailing: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: _getModeColor(mode).withOpacity(0.15),
+                      color: _getModeColor(mode).withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
@@ -108,7 +108,7 @@ class MovementLogPage extends StatelessWidget {
     }
 
     return CircleAvatar(
-      backgroundColor: color.withOpacity(0.2),
+      backgroundColor: color.withValues(alpha: 0.2),
       child: FaIcon(icon, color: color, size: 16),
     );
   }

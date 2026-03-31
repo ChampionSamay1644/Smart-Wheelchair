@@ -49,7 +49,9 @@ class BluetoothProvider extends ChangeNotifier {
       
       _apiService.uploadData(payload).then((_) {
         debugPrint('☁️ Command Sync: Uploaded ${commandData['lastCommand']} to cloud');
-      }).catchError((e) => debugPrint('Cloud command upload failed: $e'));
+      }).catchError((Object e) {
+        debugPrint('Cloud command upload failed: $e');
+      });
     }
   }
 

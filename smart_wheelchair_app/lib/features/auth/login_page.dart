@@ -4,6 +4,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import '../../core/enums.dart';
 import '../../core/providers/auth_provider.dart';
 import '../../core/providers/api_provider.dart';
+import '../../core/providers/outdoor_navigation_provider.dart';
 import '../../core/services/user_cache_service.dart';
 
 class LoginPage extends StatefulWidget {
@@ -80,6 +81,9 @@ class _LoginPageState extends State<LoginPage> {
 
         if (!mounted) return;
 
+        // Initialize Navigation Provider Role
+        context.read<OutdoorNavigationProvider>().setUserRole(widget.role);
+
         String route = switch (widget.role) {
           UserRole.patient => '/patient_dashboard',
           UserRole.guardian => '/guardian_dashboard',
@@ -127,9 +131,9 @@ class _LoginPageState extends State<LoginPage> {
               Container(
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
-                  color: Colors.blue.withOpacity(0.05),
+                  color: Colors.blue.withValues(alpha: 0.05),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: Colors.blue.withOpacity(0.2)),
+                  border: Border.all(color: Colors.blue.withValues(alpha: 0.2)),
                 ),
                 child: Column(
                   children: [

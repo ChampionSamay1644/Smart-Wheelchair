@@ -344,7 +344,7 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
             dotData: const FlDotData(show: false),
             belowBarData: BarAreaData(
               show: true,
-              color: color.withOpacity(0.1),
+              color: color.withValues(alpha: 0.1),
             ),
           ),
         ],
@@ -353,8 +353,6 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
       ),
     );
   }
-
-
 
   FlGridData get _defaultGridData =>
       const FlGridData(show: true, drawVerticalLine: false);
@@ -372,21 +370,4 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
       left: BorderSide(color: Colors.grey.shade300),
     ),
   );
-
-  FlDotData get _defaultDotData =>
-      const FlDotData(show: true, getDotPainter: _getDefaultDotPainter);
-
-  static FlDotCirclePainter _getDefaultDotPainter(
-    FlSpot spot,
-    double xPercentage,
-    LineChartBarData bar,
-    int index,
-  ) {
-    return FlDotCirclePainter(
-      radius: 4,
-      color: bar.color ?? Colors.black,
-      strokeWidth: 2,
-      strokeColor: Colors.white,
-    );
-  }
 }

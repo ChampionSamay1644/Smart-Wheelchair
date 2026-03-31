@@ -21,8 +21,8 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Store in Firebase under medical_info/{deviceId}
-        await db.ref(`medical_info/${deviceId}`).set({
+        // Update in Firebase under medical_info/{deviceId} (merges top-level fields)
+        await db.ref(`medical_info/${deviceId}`).update({
             ...info,
             lastUpdated: Date.now()
         });

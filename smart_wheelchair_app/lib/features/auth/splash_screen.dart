@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import '../../core/providers/auth_provider.dart';
 import '../../core/providers/api_provider.dart';
+import '../../core/providers/outdoor_navigation_provider.dart';
 import '../../core/enums.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -21,8 +22,6 @@ class _SplashScreenState extends State<SplashScreen> {
 
   Future<void> _checkAuthAndNavigate() async {
     // Show splash for at least 2 seconds
-    final startTime = DateTime.now();
-    
     final auth = context.read<AuthProvider>();
     final api = context.read<ApiProvider>();
 
@@ -48,6 +47,9 @@ class _SplashScreenState extends State<SplashScreen> {
         api.startPolling();
         api.reportPresence(auth.userRole == UserRole.patient ? 'patient' : 'guardian', name: auth.currentUser?.name);
       }
+
+      // Initialize Navigation Provider Role
+      context.read<OutdoorNavigationProvider>().setUserRole(auth.userRole!);
 
       final route = auth.userRole == UserRole.patient ? '/patient_dashboard' : '/guardian_dashboard';
       Navigator.pushReplacementNamed(context, route);

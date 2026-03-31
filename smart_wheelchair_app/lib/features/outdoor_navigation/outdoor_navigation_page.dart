@@ -2,14 +2,8 @@
 // Minimal MVP implementation
 
 // ignore_for_file: avoid_print
-import 'dart:async';
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:geolocator/geolocator.dart';
-import 'package:latlong2/latlong.dart';
-import 'package:http/http.dart' as http;
 
 import '../../core/providers/outdoor_navigation_provider.dart';
 import '../../core/providers/api_provider.dart';
@@ -25,38 +19,39 @@ class OutdoorNavigationPage extends StatefulWidget {
 }
 
 class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
+  late OutdoorNavigationProvider _navProvider;
+
   @override
   void initState() {
     super.initState();
+    // Ensure we mark the map UI as open after the first build
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _navProvider.setMapPageOpen(true);
+      }
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Cache the provider reference safely while the widget is still active
+    _navProvider = Provider.of<OutdoorNavigationProvider>(context, listen: false);
   }
 
   @override
   void dispose() {
+    // Use microtask to avoid 'setState() called when widget tree was locked' error
+    // which was causing the delay in the mini-map appearing on the dashboard.
+    final provider = _navProvider;
+    Future.microtask(() {
+      provider.setMapPageOpen(false);
+    });
+    debugPrint('🎨 OutdoorNavigationPage: Disposed - Map UI marked as CLOSED');
     super.dispose();
   }
 
-  Future<void> _initLocation() async {
-    final navProvider = context.read<OutdoorNavigationProvider>();
-    try {
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
 
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        return;
-      }
-
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.best),
-      );
-      if (!mounted) return;
-      navProvider.updatePosition(LatLng(pos.latitude, pos.longitude));
-    } catch (e) {
-      debugPrint('Failed to get location: $e');
-    }
-  }
 
   void _startNavigation() {
     final navProvider = context.read<OutdoorNavigationProvider>();
@@ -190,7 +185,7 @@ class _OutdoorNavigationPageState extends State<OutdoorNavigationPage> {
                     color: Colors.white,
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
+                        color: Colors.black.withValues(alpha: 0.05),
                         blurRadius: 10,
                         offset: const Offset(0, -5),
                       ),

@@ -20,6 +20,12 @@ class NavigationState {
   final double? estimatedTime; // in minutes
   final List<Map<String, dynamic>> searchResults;
   final bool isSearching;
+  final bool isMapPageOpen;
+  final String? currentInstruction;
+  final double? nextTurnDistance;
+  final List<Map<String, dynamic>> routeSteps;
+  final int currentStepIndex;
+  final double? totalRemainingDistance; // in meters
 
   NavigationState({
     this.currentPosition,
@@ -32,6 +38,12 @@ class NavigationState {
     this.estimatedTime,
     this.searchResults = const [],
     this.isSearching = false,
+    this.isMapPageOpen = false,
+    this.currentInstruction,
+    this.nextTurnDistance,
+    this.routeSteps = const [],
+    this.currentStepIndex = 0,
+    this.totalRemainingDistance,
   });
 
   NavigationState copyWith({
@@ -45,6 +57,12 @@ class NavigationState {
     double? estimatedTime,
     List<Map<String, dynamic>>? searchResults,
     bool? isSearching,
+    bool? isMapPageOpen,
+    String? currentInstruction,
+    double? nextTurnDistance,
+    List<Map<String, dynamic>>? routeSteps,
+    int? currentStepIndex,
+    double? totalRemainingDistance,
   }) {
     return NavigationState(
       currentPosition: currentPosition ?? this.currentPosition,
@@ -57,6 +75,12 @@ class NavigationState {
       estimatedTime: estimatedTime ?? this.estimatedTime,
       searchResults: searchResults ?? this.searchResults,
       isSearching: isSearching ?? this.isSearching,
+      isMapPageOpen: isMapPageOpen ?? this.isMapPageOpen,
+      currentInstruction: currentInstruction ?? this.currentInstruction,
+      nextTurnDistance: nextTurnDistance ?? this.nextTurnDistance,
+      routeSteps: routeSteps ?? this.routeSteps,
+      currentStepIndex: currentStepIndex ?? this.currentStepIndex,
+      totalRemainingDistance: totalRemainingDistance ?? this.totalRemainingDistance,
     );
   }
 
@@ -74,6 +98,10 @@ class NavigationState {
       'distance': distance,
       'estimatedTime': estimatedTime,
       'routePoints': routePoints.map((p) => {'lat': p.latitude, 'lng': p.longitude}).toList(),
+      'isMapPageOpen': isMapPageOpen,
+      'currentInstruction': currentInstruction,
+      'nextTurnDistance': nextTurnDistance,
+      'totalRemainingDistance': totalRemainingDistance,
     };
   }
 }
@@ -162,6 +190,10 @@ class OutdoorNavigationProvider extends ChangeNotifier {
       distance: data['distance']?.toDouble(),
       estimatedTime: data['estimatedTime']?.toDouble(),
       routePoints: pts,
+      isMapPageOpen: data['isMapPageOpen'] ?? false,
+      currentInstruction: data['currentInstruction'],
+      nextTurnDistance: data['nextTurnDistance']?.toDouble(),
+      // We don't necessarily need to sync full route steps for simple tracking, but can
     );
     notifyListeners();
   }
@@ -309,6 +341,7 @@ class OutdoorNavigationProvider extends ChangeNotifier {
       destination: LatLng(lat, lon),
       destinationAddress: address,
       searchResults: [],
+      currentStepIndex: 0,
     );
     notifyListeners();
     await fetchRoute();
@@ -321,7 +354,7 @@ class OutdoorNavigationProvider extends ChangeNotifier {
     final to = '${_state.destination!.longitude},${_state.destination!.latitude}';
     final uri = Uri.parse(
       'https://router.project-osrm.org/route/v1/driving/$from;$to',
-    ).replace(queryParameters: {'overview': 'full', 'geometries': 'geojson'});
+    ).replace(queryParameters: {'overview': 'full', 'geometries': 'geojson', 'steps': 'true'});
 
     try {
       final res = await http.get(uri);
@@ -339,10 +372,36 @@ class OutdoorNavigationProvider extends ChangeNotifier {
             return LatLng(lat, lon);
           }).toList();
           
+          List<Map<String, dynamic>> parsedSteps = [];
+          if (route['legs'] != null && (route['legs'] as List).isNotEmpty) {
+            final stepsInfo = route['legs'][0]['steps'];
+            if (stepsInfo != null) {
+              parsedSteps = (stepsInfo as List).cast<Map<String, dynamic>>();
+            }
+          }
+          
+          String? initialInstruction;
+          double? initialTurnDistance;
+          if (parsedSteps.isNotEmpty) {
+             final maneuver = parsedSteps[0]['maneuver'];
+             final type = maneuver['type'] as String?;
+             final modifier = maneuver['modifier'] as String?;
+             final name = parsedSteps[0]['name'] as String?;
+             
+             if (type != null) {
+               initialInstruction = '$type ${modifier ?? ""} ${name?.isNotEmpty == true ? "on $name" : ""}';
+             }
+             initialTurnDistance = (parsedSteps[0]['distance'] as num?)?.toDouble();
+          }
+
           _state = _state.copyWith(
             routePoints: pts,
             distance: distance,
             estimatedTime: duration,
+            routeSteps: parsedSteps,
+            currentInstruction: initialInstruction ?? 'Head to destination',
+            nextTurnDistance: initialTurnDistance,
+            currentStepIndex: 0,
           );
           _broadcastState();
           notifyListeners();
@@ -355,8 +414,81 @@ class OutdoorNavigationProvider extends ChangeNotifier {
 
   void updatePosition(LatLng position) {
     debugPrint('📍 GPS Update: ${position.latitude}, ${position.longitude}');
-    _state = _state.copyWith(currentPosition: position);
+    
+    String? currentInstruction = _state.currentInstruction;
+    double? nextTurnDistance = _state.nextTurnDistance;
+    List<Map<String, dynamic>> routeSteps = List.from(_state.routeSteps);
+    int currentStepIndex = _state.currentStepIndex;
+
+    if (_state.isNavigating && routeSteps.isNotEmpty && currentStepIndex < routeSteps.length) {
+        final maneuver = routeSteps[currentStepIndex]['maneuver'];
+        final loc = maneuver['location'] as List; // lon, lat
+        final stepPos = LatLng((loc[1] as num).toDouble(), (loc[0] as num).toDouble());
+        final distToStep = const Distance().as(LengthUnit.Meter, position, stepPos);
+        
+        if (distToStep < 20.0) {
+           final nextIndex = currentStepIndex + 1;
+           if (nextIndex < routeSteps.length) {
+             final nextManeuver = routeSteps[nextIndex]['maneuver'];
+             final type = nextManeuver['type'] as String?;
+             final modifier = nextManeuver['modifier'] as String?;
+             final name = routeSteps[nextIndex]['name'] as String?;
+             
+             if (type != null) {
+               currentInstruction = '$type ${modifier ?? ""} ${name?.isNotEmpty == true ? "on $name" : ""}';
+             }
+             nextTurnDistance = (routeSteps[nextIndex]['distance'] as num?)?.toDouble();
+             currentStepIndex = nextIndex;
+           } else {
+             currentInstruction = 'Arrived at destination';
+             nextTurnDistance = 0;
+           }
+        } else {
+          nextTurnDistance = distToStep;
+        }
+
+        // Calculate total remaining distance (current step to destination)
+        double total = distToStep;
+        if (currentStepIndex + 1 < routeSteps.length) {
+          for (int i = currentStepIndex + 1; i < routeSteps.length; i++) {
+            total += (routeSteps[i]['distance'] as num?)?.toDouble() ?? 0.0;
+          }
+        }
+        
+        // Jitter Filtering: Only update if change > 3m or very close (< 10m)
+        final oldDist = _state.nextTurnDistance ?? 999.0;
+        final currentDist = nextTurnDistance ?? 0.0;
+        final delta = (currentDist - oldDist).abs();
+        
+        if (delta < 3.0 && currentDist > 10.0 && currentStepIndex == _state.currentStepIndex) {
+           // Skip update to prevent jitter while stationary
+           return;
+        }
+
+        _state = _state.copyWith(
+          currentPosition: position,
+          currentInstruction: currentInstruction,
+          nextTurnDistance: nextTurnDistance,
+          totalRemainingDistance: total,
+          currentStepIndex: currentStepIndex,
+        );
+        _broadcastState();
+        notifyListeners();
+        return;
+    }
+
+    _state = _state.copyWith(
+      currentPosition: position,
+      currentInstruction: currentInstruction,
+      nextTurnDistance: nextTurnDistance,
+      currentStepIndex: currentStepIndex,
+    );
     _broadcastState();
+    notifyListeners();
+  }
+
+  void setMapPageOpen(bool isOpen) {
+    _state = _state.copyWith(isMapPageOpen: isOpen);
     notifyListeners();
   }
 

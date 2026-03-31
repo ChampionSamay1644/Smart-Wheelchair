@@ -1,6 +1,5 @@
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
-import '../enums.dart';
 
 class SyncService {
   final FirebaseDatabase _db = FirebaseDatabase.instance;
