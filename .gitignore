@@ -26,3 +26,13 @@ logs/
 /wheelchair-api/.next
 /wheelchair-api/node_modules
 smart-wheelchair-44-firebase-adminsdk-fbsvc-bb6b1af07e.json
+Commands for RPI (1).docx
+Max30100/
+sensor_monitor_enhanced.py
+sensor_server_standalone.py
+test_emergency_alert.py
+webscraper/
+wheelchair_control_fast.py.backup
+wheelchair_control_old.py
+yolov8n.pt
+
