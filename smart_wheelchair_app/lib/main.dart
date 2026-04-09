@@ -1,35 +1,68 @@
-// ignore_for_file: avoid_print
-
+import 'dart:async';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:smart_wheelchair_app/features/outdoor_navigation/outdoor_navigation_page.dart';
 import 'package:provider/provider.dart';
 import 'core/providers/auth_provider.dart';
 import 'core/providers/connection_provider.dart';
 import 'core/providers/camera_feed_provider.dart';
-import 'bluetooth_connection_page.dart';
 import 'core/providers/bluetooth_provider.dart';
+import 'core/providers/outdoor_navigation_provider.dart';
+import 'core/providers/emergency_contacts_provider.dart';
+import 'core/providers/alert_provider.dart';
+import 'bluetooth_connection_page.dart';
 import 'widgets/connection_dialog.dart';
 import 'features/auth/splash_screen.dart';
 import 'features/auth/role_selection_page.dart';
-import 'features/dashboard/doctor_dashboard.dart';
 import 'features/dashboard/guardian_dashboard.dart';
 import 'features/dashboard/health_status_page.dart';
+import 'features/dashboard/medical_info_page.dart';
 import 'features/dashboard/movement_log_page.dart';
 import 'joystick_control_page.dart';
 import 'manual_control_page.dart';
-import 'remote_control_page.dart';
 import 'settings_page.dart';
 import 'voice_control_page.dart';
 import 'services/emergency_stop_service.dart';
+import 'core/providers/locale_provider.dart';
+import 'core/localization.dart';
+import 'features/settings/emergency_contacts_page.dart';
+import 'services/api_service.dart';
+import 'core/providers/api_provider.dart';
+import 'core/enums.dart';
+import 'features/auth/login_page.dart';
+import 'core/services/sync_service.dart';
+import 'features/outdoor_navigation/global_navigation_overlay.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  await ApiService().init();
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider()),
+        ChangeNotifierProvider(create: (_) => ApiProvider()),
         ChangeNotifierProvider(create: (_) => ConnectionProvider()),
         ChangeNotifierProvider(create: (_) => CameraFeedProvider()),
-        ChangeNotifierProvider(create: (_) => BluetoothProvider()),
+        ChangeNotifierProxyProvider<ApiProvider, BluetoothProvider>(
+          create: (context) => BluetoothProvider(context.read<ApiProvider>()),
+          update: (context, api, bluetooth) => bluetooth!,
+        ),
+        ChangeNotifierProvider(create: (_) => LocaleProvider()),
+        ChangeNotifierProvider(create: (_) => EmergencyContactsProvider()),
+        ChangeNotifierProxyProvider2<ConnectionProvider, ApiProvider, OutdoorNavigationProvider>(
+          create: (context) => OutdoorNavigationProvider(
+            context.read<ConnectionProvider>(),
+            context.read<ApiProvider>(),
+          ),
+          update: (context, connection, api, navigation) => navigation!,
+        ),
+        ChangeNotifierProxyProvider<ApiProvider, AlertProvider>(
+          create: (_) => AlertProvider(),
+          update: (_, api, alert) => alert!..updateDeviceId(api.selectedDeviceId),
+        ),
+        Provider(create: (_) => SyncService()),
       ],
       child: const MyApp(),
     ),
@@ -42,7 +75,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SmartNav Wheelchair',
+      title: 'SmartNav',
       theme: ThemeData(
         primaryColor: Colors.blue,
         colorScheme: ColorScheme.fromSeed(
@@ -58,23 +91,35 @@ class MyApp extends StatelessWidget {
           ),
         ),
       ),
+      builder: (context, child) {
+        return Stack(
+          children: [
+            if (child != null) child,
+            // Only patient currently uses pip outdoor nav rendering, though it could be guarded by UserRole check
+            const GlobalNavigationOverlay(),
+          ],
+        );
+      },
       initialRoute: '/',
       routes: {
         '/': (context) => const SplashScreen(),
         '/role_selection': (context) => const RoleSelectionPage(),
+        '/login': (context) => LoginPage(
+              role: ModalRoute.of(context)!.settings.arguments as UserRole,
+            ),
         '/patient_dashboard': (context) =>
             const MyHomePage(title: 'Patient Dashboard'),
-        '/doctor_dashboard': (context) => const DoctorDashboard(),
         '/guardian_dashboard': (context) => const GuardianDashboard(),
+        '/medical_info': (context) => const MedicalInfoPage(),
         '/health_status': (context) => const HealthStatusPage(),
         '/movement_log': (context) => const MovementLogPage(),
         '/manual_control': (context) => ManualControlPage(),
         '/joystick_control': (context) => JoystickControlPage(),
         '/voice_control': (context) => VoiceControlPage(),
-        '/remote_control': (context) => RemoteControlPage(),
         '/settings': (context) => SettingsPage(),
         '/location': (context) => const OutdoorNavigationPage(),
         '/bluetooth_connection': (context) => const BluetoothConnectionPage(),
+        '/emergency_contacts': (context) => const EmergencyContactsPage(),
       },
       debugShowCheckedModeBanner: false,
     );
@@ -101,6 +146,183 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   bool _hasPromptedConnectionDialog = false;
+
+  bool _isHoldingEmergency = false;
+  double _emergencyProgress = 0.0;
+  Timer? _emergencyTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkProfileCompleteness();
+      context.read<ApiProvider>().reportPresence('patient');
+      _startBackgroundSync();
+    });
+  }
+
+  Future<void> _checkProfileCompleteness() async {
+    final api = context.read<ApiProvider>();
+    if (api.selectedDeviceId == null) return;
+
+    try {
+      final info = await ApiService().fetchMedicalInfo(api.selectedDeviceId!);
+      if (mounted && (info['name'] == null || info['name'].toString().isEmpty)) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (c) => AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.medical_services_outlined, color: Colors.blue),
+                SizedBox(width: 8),
+                Text('Medical Setup'),
+              ],
+            ),
+            content: const Text(
+                'Welcome! Please take a moment to fill in your medical information. This is critical for emergency services to help you effectively.'
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(c),
+                child: const Text('LATER'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(c);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (c) => const MedicalInfoPage(isInitialSetup: true),
+                    ),
+                  );
+                },
+                child: const Text('SETUP NOW'),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error checking patient profile: $e');
+    }
+  }
+
+  void _startEmergencyHold() {
+    setState(() {
+      _isHoldingEmergency = true;
+      _emergencyProgress = 0.0;
+    });
+    _emergencyTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) async {
+      setState(() {
+        _emergencyProgress += 1/60; // 50ms * 60 = 3s
+      });
+      if (_emergencyProgress >= 1.0) {
+        _emergencyTimer?.cancel();
+        _triggerEmergency();
+      }
+    });
+  }
+
+  void _cancelEmergencyHold() {
+    _emergencyTimer?.cancel();
+    setState(() {
+      _isHoldingEmergency = false;
+      _emergencyProgress = 0.0;
+    });
+  }
+
+  Future<void> _triggerEmergency() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final apiProvider = Provider.of<ApiProvider>(context, listen: false);
+    
+    await EmergencyStopService.trigger();
+    
+    // Write emergency alert directly to Firebase (bypasses Vercel API)
+    final deviceId = apiProvider.selectedDeviceId;
+    if (deviceId != null) {
+      final alertRef = FirebaseDatabase.instance.ref('devices/$deviceId/alerts');
+      await alertRef.push().set({
+        'title': '🚨 Emergency Button',
+        'message': 'Patient triggered emergency stop (3s hold verified)',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+        'read': false,
+        'severity': 'critical',
+      });
+      debugPrint('🚨 Emergency alert written to Firebase for device: $deviceId');
+
+      // 🔥 ALSO TRIGGER EMAIL NOTIFICATION
+      try {
+        final medicalInfo = await ApiService().fetchMedicalInfo(deviceId);
+        final patientName = medicalInfo['name'] ?? 'The Patient';
+        final guardianEmail = medicalInfo['guardian']?['email'];
+
+        if (guardianEmail != null && guardianEmail.isNotEmpty) {
+           debugPrint('📨 Triggering Emergency Email to Guardian: $guardianEmail');
+           await ApiService().sendHealthAlertEmail(
+             targetEmail: guardianEmail,
+             type: 'health_alert', // Reusing health_alert template for emergency
+             patientName: patientName,
+             vitalInfo: 'SOS: Patient pressed Emergency Trigger button!',
+           );
+        }
+      } catch (e) {
+        debugPrint('❌ Failed to trigger emergency email: $e');
+      }
+    }
+    
+    if (!mounted) return;
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text('EMERGENCY STOP ACTIVATED!'),
+        backgroundColor: Colors.red,
+        duration: Duration(seconds: 4),
+      ),
+    );
+    setState(() {
+      _isHoldingEmergency = false;
+      _emergencyProgress = 0.0;
+    });
+  }
+
+  Timer? _syncTimer;
+
+
+
+  void _startBackgroundSync() {
+    final syncService = context.read<SyncService>();
+    final authProvider = context.read<AuthProvider>();
+    
+    // Periodically push mock sensor data if in mock mode (always for now)
+    _syncTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+      final user = authProvider.currentUser;
+      if (user == null) return;
+      
+      // Use 'test_patient_123' for ASAP interconnectivity demo, or user.id
+      final uid = 'test_patient_123'; 
+      
+      // Mock data generation
+      final random = DateTime.now().second;
+      final heartRate = 72.0 + (random % 10);
+      final spo2 = 98.0 + (random % 2);
+      
+      await syncService.updatePatientStatus(
+        uid: uid,
+        heartRate: heartRate,
+        spo2: spo2,
+        lat: 19.0760, // Mumbai coordinates
+        lng: 72.8777,
+        isEmergency: _isHoldingEmergency,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _emergencyTimer?.cancel();
+    _syncTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   void didChangeDependencies() {
@@ -129,31 +351,33 @@ class _MyHomePageState extends State<MyHomePage> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).primaryColor,
-        title: const FittedBox(
-          fit: BoxFit.scaleDown,
-          alignment: Alignment.centerLeft,
-          child: Text(
-            'Smart Wheelchair',
-            style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 24,
-            ),
-          ),
-        ),
         elevation: 4,
+        // Title with app logo and localized title
+        title: Row(
+          children: [
+            // asset logo with fallback
+            ClipOval(
+              child: Image.asset(
+                'assets/logo.jpg',
+                height: 36,
+                width: 36,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) =>
+                    const FlutterLogo(size: 36),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              tr(context, 'app_title'),
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
         actions: [
-          IconButton(
-            icon: const Icon(
-              Icons.help,
-              color: Colors.white,
-            ), // Request Help icon
-            onPressed: () {
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(const SnackBar(content: Text('Help requested!')));
-            },
-          ),
           const _ConnectionStatusAction(),
           const _BluetoothStatusAction(),
           IconButton(
@@ -163,6 +387,34 @@ class _MyHomePageState extends State<MyHomePage> {
             },
           ),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(48),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 16.0,
+              vertical: 8.0,
+            ),
+            child: Row(
+              children: [
+                DropdownButton<String>(
+                  value: context.watch<LocaleProvider>().locale,
+                  underline: const SizedBox(),
+                  items: const [
+                    DropdownMenuItem(value: 'en', child: Text('English')),
+                    DropdownMenuItem(value: 'hi', child: Text('हिन्दी')),
+                    DropdownMenuItem(value: 'mr', child: Text('मराठी')),
+                  ],
+                  onChanged: (code) {
+                    if (code != null) {
+                      context.read<LocaleProvider>().setLocale(code);
+                    }
+                  },
+                ),
+                const Spacer(),
+              ],
+            ),
+          ),
+        ),
       ),
       drawer: Drawer(
         child: ListView(
@@ -171,27 +423,35 @@ class _MyHomePageState extends State<MyHomePage> {
             DrawerHeader(
               decoration: BoxDecoration(color: Colors.blue),
               child: Text(
-                'Patient Menu',
+                tr(context, 'patient_menu'),
                 style: TextStyle(color: Colors.white, fontSize: 24),
               ),
             ),
             ListTile(
               leading: Icon(Icons.health_and_safety),
-              title: Text('Health Status'),
+              title: Text(tr(context, 'health_status')),
               onTap: () => Navigator.pushNamed(context, '/health_status'),
             ),
             ListTile(
+              leading: Icon(Icons.medical_services),
+              title: Text('Medical Info'),
+              onTap: () => Navigator.pushNamed(context, '/medical_info'),
+            ),
+            ListTile(
               leading: Icon(Icons.settings),
-              title: Text('Settings'),
+              title: Text(tr(context, 'settings')),
               onTap: () => Navigator.pushNamed(context, '/settings'),
             ),
             ListTile(
               leading: Icon(Icons.logout),
-              title: Text('Logout'),
+              title: Text(tr(context, 'logout')),
               onTap: () async {
                 await context.read<AuthProvider>().logout();
                 if (!context.mounted) return;
-                Navigator.pushReplacementNamed(context, '/role_selection');
+                Navigator.pushReplacementNamed(
+                  context,
+                  '/role_selection',
+                );
               },
             ),
           ],
@@ -202,7 +462,8 @@ class _MyHomePageState extends State<MyHomePage> {
           Expanded(
             flex: 1,
             child: Container(
-              margin: const EdgeInsets.all(16),
+              // move camera down slightly by increasing top margin
+              margin: const EdgeInsets.fromLTRB(16, 24, 16, 16),
               decoration: BoxDecoration(
                 color: Colors.black87,
                 borderRadius: BorderRadius.circular(20),
@@ -295,28 +556,16 @@ class _MyHomePageState extends State<MyHomePage> {
           Expanded(
             flex: 1,
             child: Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(14),
               child: GridView.count(
                 crossAxisCount: 2,
                 childAspectRatio: 1,
-                mainAxisSpacing: 16,
-                crossAxisSpacing: 16,
+                mainAxisSpacing: 14,
+                crossAxisSpacing: 14,
                 children: [
                   _buildControlButton(
                     context,
-                    'Remote Control',
-                    Icons.route,
-                    Colors.blue[700]!,
-                    () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => RemoteControlPage(),
-                      ),
-                    ),
-                  ),
-                  _buildControlButton(
-                    context,
-                    'Manual Control',
+                    tr(context, 'manual_control'),
                     Icons.gamepad,
                     Colors.green[700]!,
                     () => Navigator.push(
@@ -328,7 +577,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                   _buildControlButton(
                     context,
-                    'Joystick Control',
+                    tr(context, 'joystick_control'),
                     Icons.sports_esports,
                     Colors.purple[700]!,
                     () => Navigator.push(
@@ -340,7 +589,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                   _buildControlButton(
                     context,
-                    'Voice Control',
+                    tr(context, 'voice_control'),
                     Icons.mic,
                     Colors.orange[700]!,
                     () => Navigator.push(
@@ -357,21 +606,40 @@ class _MyHomePageState extends State<MyHomePage> {
         ],
       ),
       floatingActionButton: SizedBox(
-        height: 64,
-        width: 64,
-        child: FloatingActionButton(
-          backgroundColor: Colors.red,
-          onPressed: () async {
-            await EmergencyStopService.trigger();
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Emergency stop sent'),
-                backgroundColor: Colors.red,
-                duration: Duration(seconds: 2),
+        height: 80,
+        width: 80,
+        child: GestureDetector(
+          onLongPressStart: (_) => _startEmergencyHold(),
+          onLongPressEnd: (_) => _cancelEmergencyHold(),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              if (_isHoldingEmergency)
+                SizedBox(
+                  height: 80,
+                  width: 80,
+                  child: CircularProgressIndicator(
+                    value: _emergencyProgress,
+                    strokeWidth: 8,
+                    color: Colors.red[900],
+                    backgroundColor: Colors.red[100],
+                  ),
+                ),
+              FloatingActionButton(
+                backgroundColor: _isHoldingEmergency ? Colors.red[900] : Colors.red,
+                elevation: _isHoldingEmergency ? 0 : 6,
+                onPressed: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Hold for 5 seconds to trigger emergency'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                },
+                child: const Icon(Icons.warning_amber_rounded, size: 36),
               ),
-            );
-          },
-          child: const Icon(Icons.warning_amber_rounded, size: 32),
+            ],
+          ),
         ),
       ),
     );
@@ -391,7 +659,7 @@ class _MyHomePageState extends State<MyHomePage> {
           end: Alignment.bottomRight,
           colors: [color, color.withAlpha((0.8 * 255).round())],
         ),
-        borderRadius: BorderRadius.circular(15),
+        borderRadius: BorderRadius.circular(13),
         boxShadow: [
           BoxShadow(
             color: color.withAlpha((0.8 * 255).round()),
@@ -404,17 +672,17 @@ class _MyHomePageState extends State<MyHomePage> {
         color: Colors.transparent,
         child: InkWell(
           onTap: onPressed,
-          borderRadius: BorderRadius.circular(15),
+          borderRadius: BorderRadius.circular(13),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 40, color: Colors.white),
-              const SizedBox(height: 8),
+              Icon(icon, size: 30, color: Colors.white),
+              const SizedBox(height: 4),
               Text(
                 label,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 16,
+                  fontSize: 12,
                   fontWeight: FontWeight.bold,
                 ),
               ),

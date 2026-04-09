@@ -1,5 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:provider/provider.dart';
+import '../../core/providers/auth_provider.dart';
+import '../../core/providers/api_provider.dart';
+import '../../core/providers/outdoor_navigation_provider.dart';
+import '../../core/enums.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -12,11 +17,46 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    // Auto-navigate after 2 seconds
-    Future.delayed(const Duration(seconds: 2), () {
-      if (!mounted) return;
+    _checkAuthAndNavigate();
+  }
+
+  Future<void> _checkAuthAndNavigate() async {
+    // Show splash for at least 2 seconds
+    final auth = context.read<AuthProvider>();
+    final api = context.read<ApiProvider>();
+
+    // Wait for providers to initialize from storage
+    int retries = 0;
+    while ((!auth.isInitialized || !api.apiUrl.toString().contains('http')) && retries < 15) {
+      debugPrint('⏳ Waiting for Storage providers initialization... (Attempt ${retries + 1})');
+      await Future.delayed(const Duration(milliseconds: 300));
+      retries++;
+    }
+
+    if (api.selectedDeviceId != null) {
+       debugPrint('🔌 API: Restored Device preference: ${api.selectedDeviceId}');
+    }
+
+    if (!mounted) return;
+
+    if (auth.isAuthenticated) {
+      debugPrint('✅ SESSION RESTORED: User=${auth.currentUser?.name}, Role=${auth.userRole}');
+      
+      // If we have a device ID, ensure polling is started
+      if (api.selectedDeviceId != null) {
+        api.startPolling();
+        api.reportPresence(auth.userRole == UserRole.patient ? 'patient' : 'guardian', name: auth.currentUser?.name);
+      }
+
+      // Initialize Navigation Provider Role
+      context.read<OutdoorNavigationProvider>().setUserRole(auth.userRole!);
+
+      final route = auth.userRole == UserRole.patient ? '/patient_dashboard' : '/guardian_dashboard';
+      Navigator.pushReplacementNamed(context, route);
+    } else {
+      debugPrint('🚫 NO SESSION FOUND: Directing to Role Selection.');
       Navigator.pushReplacementNamed(context, '/role_selection');
-    });
+    }
   }
 
   @override

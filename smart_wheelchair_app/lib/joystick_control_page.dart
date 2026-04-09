@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'core/providers/bluetooth_provider.dart';
+import 'core/localization.dart';
 import 'services/emergency_stop_service.dart';
 
 class JoystickControlPage extends StatefulWidget {
@@ -32,7 +33,7 @@ class _JoystickControlPageState extends State<JoystickControlPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Joystick Control'),
+        title: Text(tr(context, 'joystick_control')),
         backgroundColor: Theme.of(context).primaryColor,
         actions: [
           IconButton(
@@ -48,9 +49,9 @@ class _JoystickControlPageState extends State<JoystickControlPage> {
           final isConnected = provider.isConnected;
           final statusText = isConnected
               ? provider.movementState == 'moving'
-                    ? 'Streaming motion via joystick'
-                    : 'Bluetooth connected'
-              : 'Connect to wheelchair over Bluetooth to enable joystick control';
+                    ? tr(context, 'streaming_motion')
+                    : tr(context, 'bluetooth_connected')
+              : tr(context, 'connect_bluetooth');
 
           return Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -135,10 +136,12 @@ class _JoystickControlPageState extends State<JoystickControlPage> {
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.red,
         onPressed: () async {
+          final messenger = ScaffoldMessenger.of(context);
           await EmergencyStopService.trigger();
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('Emergency stop sent')));
+          if (!mounted) return;
+          messenger.showSnackBar(
+            const SnackBar(content: Text('Emergency stop sent')),
+          );
         },
         child: const Icon(Icons.warning),
       ),
@@ -217,9 +220,12 @@ class _JoystickControlPageState extends State<JoystickControlPage> {
         forceStop: shouldRequestStop,
       );
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to stream joystick data: $e')),
-      );
+      if (mounted) {
+        final messenger = ScaffoldMessenger.of(context);
+        messenger.showSnackBar(
+          SnackBar(content: Text('Failed to stream joystick data: $e')),
+        );
+      }
       _stopStreaming();
     } finally {
       _isSending = false;

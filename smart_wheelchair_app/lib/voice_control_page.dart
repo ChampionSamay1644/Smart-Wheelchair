@@ -16,6 +16,7 @@ import 'services/wheelchair_websocket_service.dart';
 import 'services/emergency_stop_service.dart';
 import 'voice_enrollment_page.dart';
 import 'widgets/connection_dialog.dart';
+import 'core/localization.dart';
 
 class VoiceControlPage extends StatefulWidget {
   @override
@@ -605,7 +606,7 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
 
   void _emergencyStop() {
     EmergencyStopService.trigger();
-    _showSnackBar('🚨 Emergency stop sent');
+    _showSnackBar(tr(context, 'emergency_stop_sent'));
   }
 
   Future<void> _navigateToEnrollment({bool force = false}) async {
@@ -696,21 +697,21 @@ class _VoiceControlPageState extends State<VoiceControlPage> {
         title: Row(
           mainAxisSize: MainAxisSize.max,
           children: [
-            const Flexible(
+            Flexible(
               child: Text(
-                'Voice Control',
+                tr(context, 'voice_control'),
                 overflow: TextOverflow.ellipsis,
               ),
             ),
             const SizedBox(width: 8),
             Tooltip(
               message: !_isWifiAvailable
-                  ? 'Wi-Fi disconnected'
+                  ? tr(context, 'wifi_disconnected')
                   : isConnected
-                  ? 'Connected to wheelchair'
+                  ? tr(context, 'connected_to_wheelchair')
                   : isConnecting
-                  ? 'Connecting to wheelchair'
-                  : 'Not connected',
+                  ? tr(context, 'connecting_to_wheelchair')
+                  : tr(context, 'not_connected'),
               child: Icon(
                 Icons.circle,
                 size: 12,

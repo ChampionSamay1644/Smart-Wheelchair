@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'core/providers/bluetooth_provider.dart';
+import 'core/localization.dart';
 import 'services/emergency_stop_service.dart';
 
 class ManualControlPage extends StatelessWidget {
@@ -11,12 +12,12 @@ class ManualControlPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Manual Control'),
+        title: Text(tr(context, 'manual_control')),
         backgroundColor: Theme.of(context).primaryColor,
         actions: [
           IconButton(
             icon: const Icon(Icons.settings_bluetooth),
-            tooltip: 'Bluetooth settings',
+            tooltip: tr(context, 'bluetooth_settings'),
             onPressed: () =>
                 Navigator.pushNamed(context, '/bluetooth_connection'),
           ),
@@ -49,7 +50,7 @@ class ManualControlPage extends StatelessWidget {
                 _buildDirectionButton(
                   context,
                   icon: Icons.arrow_upward,
-                  label: 'Forward',
+                  label: tr(context, 'forward'),
                   command: 'forward',
                   enabled: isConnected && activeCommand != 'forward',
                 ),
@@ -60,7 +61,7 @@ class ManualControlPage extends StatelessWidget {
                     _buildDirectionButton(
                       context,
                       icon: Icons.arrow_back,
-                      label: 'Left',
+                      label: tr(context, 'left'),
                       command: 'left',
                       enabled: isConnected && activeCommand != 'left',
                     ),
@@ -68,7 +69,7 @@ class ManualControlPage extends StatelessWidget {
                     _buildDirectionButton(
                       context,
                       icon: Icons.arrow_forward,
-                      label: 'Right',
+                      label: tr(context, 'right'),
                       command: 'right',
                       enabled: isConnected && activeCommand != 'right',
                     ),
@@ -78,7 +79,7 @@ class ManualControlPage extends StatelessWidget {
                 _buildDirectionButton(
                   context,
                   icon: Icons.arrow_downward,
-                  label: 'Backward',
+                  label: tr(context, 'backward'),
                   command: 'backward',
                   enabled: isConnected && activeCommand != 'backward',
                 ),
@@ -95,7 +96,7 @@ class ManualControlPage extends StatelessWidget {
                       ? () => _sendCommand(context, 'stop')
                       : null,
                   icon: const Icon(Icons.stop_circle_outlined),
-                  label: const Text('Stop'),
+                  label: Text(tr(context, 'stop')),
                 ),
               ],
             );
@@ -105,10 +106,10 @@ class ManualControlPage extends StatelessWidget {
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.red,
         onPressed: () async {
+          final messenger = ScaffoldMessenger.of(context);
+          final message = tr(context, 'emergency_stop_sent');
           await EmergencyStopService.trigger();
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Emergency stop sent')),
-          );
+          messenger.showSnackBar(SnackBar(content: Text(message)));
         },
         child: const Icon(Icons.warning),
       ),
@@ -148,9 +149,10 @@ class ManualControlPage extends StatelessWidget {
   }
 
   Future<void> _sendCommand(BuildContext context, String command) async {
+    final messenger = ScaffoldMessenger.of(context);
     final provider = context.read<BluetoothProvider>();
     if (!provider.isConnected) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         const SnackBar(
           content: Text('Connect to the wheelchair over Bluetooth first.'),
         ),
@@ -161,9 +163,9 @@ class ManualControlPage extends StatelessWidget {
     try {
       await provider.sendManualCommand(command);
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to send command: $e')));
+      messenger.showSnackBar(
+        SnackBar(content: Text('Failed to send command: $e')),
+      );
     }
   }
 }
@@ -196,7 +198,7 @@ class _StatusBanner extends StatelessWidget {
         trailing: activeCommand != null
             ? Chip(
                 label: Text(activeCommand!.toUpperCase()),
-                backgroundColor: Colors.blue.withOpacity(0.1),
+                backgroundColor: Colors.blue.withAlpha((0.1 * 255).round()),
               )
             : null,
       ),

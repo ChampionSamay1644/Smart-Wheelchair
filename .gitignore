@@ -26,6 +26,28 @@ logs/
 /wheelchair-api/.next
 /wheelchair-api/node_modules
 smart-wheelchair-44-firebase-adminsdk-fbsvc-bb6b1af07e.json
+
+# Global Ignores
+**/node_modules/
+**/.next/
+**/.dart_tool/
+**/build/
+**/bin/
+**/obj/
+**/.packages
+**/.gradle/
+**/.idea/
+**/.vscode/
+.pub-cache/
+.pub/
+*.pyc
+__pycache__/
+*.log
+.env
+.env.local
+# Data sensitive and experimental
+randoms/
+verify_connection.py
 Commands for RPI (1).docx
 Max30100/
 sensor_monitor_enhanced.py

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 import 'dart:math' as math;
-import 'dart:typed_data';
+// `Uint8List` is provided via `package:flutter/foundation.dart` so explicit import not required
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
@@ -52,10 +52,16 @@ class WheelchairBluetoothService {
   String? get connectedAddress => _connectedAddress;
 
   /// Obtain the current adapter state.
-  Future<BluetoothState> getState() => _bluetooth.state;
+  Future<BluetoothState> getState() async {
+    if (kIsWeb) return BluetoothState.UNKNOWN;
+    return _bluetooth.state;
+  }
 
   /// Listen to adapter state updates.
-  Stream<BluetoothState> onAdapterStateChanged() => _bluetooth.onStateChanged();
+  Stream<BluetoothState> onAdapterStateChanged() {
+    if (kIsWeb) return const Stream.empty();
+    return _bluetooth.onStateChanged();
+  }
 
   /// List bonded/paired devices. Manual pairing must happen in the OS
   /// settings before establishing RFCOMM connections.
@@ -281,7 +287,7 @@ class WheelchairBluetoothService {
     }
 
     try {
-      final frame = jsonEncode(payload) + '\n';
+      final frame = '${jsonEncode(payload)}\n';
       connection.output.add(Uint8List.fromList(frame.codeUnits));
       await connection.output.allSent;
     } catch (error) {
@@ -349,21 +355,31 @@ class WheelchairBluetoothService {
       return;
     }
 
-    final permissions = <Permission>{
-      Permission.bluetooth,
+    final permissions = <Permission>[
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
+      Permission.bluetoothAdvertise,
       Permission.locationWhenInUse,
-    };
+    ];
 
     final denied = <Permission>[];
     for (final permission in permissions) {
       final status = await permission.status;
-      if (status.isGranted) {
+      if (status.isGranted || status.isLimited) {
         continue;
       }
+      
+      // Request the permission
       final result = await permission.request();
-      if (!result.isGranted) {
+      if (!result.isGranted && !result.isLimited) {
+        // Some permissions might not be available on older/newer versions, 
+        // they might return permanentlyDenied or restricted.
+        // We only add to denied if it's strictly necessary and denied.
+        if (permission == Permission.locationWhenInUse) {
+           // On some Android 12+ devices with neverForLocation, 
+           // location might not be strictly required for BT. We'll be lenient.
+           continue; 
+        }
         denied.add(permission);
       }
     }

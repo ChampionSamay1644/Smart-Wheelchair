@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { database } from '@/lib/firebase-client';
-import { ref, onValue, off } from 'firebase/database';
+import { ref, onValue, off, DataSnapshot } from 'firebase/database';
 
 interface SensorData {
   deviceId: string;
@@ -28,16 +28,17 @@ interface SensorData {
   obstacle?: string | null;
 }
 
-interface DeviceInfo {
+interface Device {
   deviceId: string;
   lastUpdate: number | null;
   online: boolean;
 }
 
 export default function Dashboard() {
-  const [devices, setDevices] = useState<DeviceInfo[]>([]);
+  const [devices, setDevices] = useState<Device[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string>('');
   const [sensorData, setSensorData] = useState<SensorData | null>(null);
+  const [sessions, setSessions] = useState<{ [key: string]: any }>({});
   const [systemStatus, setSystemStatus] = useState<{
     killswitch: boolean;
     status: string;
@@ -61,6 +62,23 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, []);
 
+  // Fetch sessions
+  useEffect(() => {
+    const fetchSessions = async () => {
+      try {
+        const res = await fetch('/api/sessions');
+        const data = await res.json();
+        setSessions(data.sessions || {});
+      } catch (error) {
+        console.error('Error fetching sessions:', error);
+      }
+    };
+
+    fetchSessions();
+    const interval = setInterval(fetchSessions, 5000); // Check every 5s
+    return () => clearInterval(interval);
+  }, []);
+
   // Fetch devices list
   useEffect(() => {
     const fetchDevices = async () => {
@@ -68,7 +86,7 @@ export default function Dashboard() {
         const res = await fetch('/api/devices');
         const data = await res.json();
         setDevices(data.devices || []);
-        
+
         // Auto-select first device
         if (data.devices.length > 0 && !selectedDevice) {
           setSelectedDevice(data.devices[0].deviceId);
@@ -88,8 +106,8 @@ export default function Dashboard() {
     if (!selectedDevice) return;
 
     const deviceRef = ref(database, `devices/${selectedDevice}/current`);
-    
-    const unsubscribe = onValue(deviceRef, (snapshot) => {
+
+    const unsubscribe = onValue(deviceRef, (snapshot: DataSnapshot) => {
       const data = snapshot.val();
       if (data) {
         setSensorData(data);
@@ -105,6 +123,15 @@ export default function Dashboard() {
 
   const getStatusColor = (online: boolean) => {
     return online ? 'bg-green-500' : 'bg-red-500';
+  };
+
+  const getRoleIcon = (role: string) => {
+    switch (role.toLowerCase()) {
+      case 'patient': return '♿';
+      case 'guardian': return '👤';
+      case 'doctor': return '👨‍⚕️';
+      default: return '📱';
+    }
   };
 
   const getObstacleColor = (obstacle: string | null | undefined) => {
@@ -124,11 +151,10 @@ export default function Dashboard() {
 
         {/* System Status */}
         {systemStatus && (
-          <div className={`mb-6 p-4 rounded-xl ${
-            systemStatus.killswitch 
-              ? 'bg-red-900/20 border border-red-500/50' 
-              : 'bg-green-900/20 border border-green-500/50'
-          }`}>
+          <div className={`mb-6 p-4 rounded-xl ${systemStatus.killswitch
+            ? 'bg-red-900/20 border border-red-500/50'
+            : 'bg-green-900/20 border border-green-500/50'
+            }`}>
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-lg font-semibold text-white">System Status</h3>
@@ -136,45 +162,81 @@ export default function Dashboard() {
                   {systemStatus.message}
                 </p>
               </div>
-              <div className={`px-4 py-2 rounded-full ${
-                systemStatus.killswitch ? 'bg-red-500' : 'bg-green-500'
-              } text-white font-bold`}>
+              <div className={`px-4 py-2 rounded-full ${systemStatus.killswitch ? 'bg-red-500' : 'bg-green-500'
+                } text-white font-bold`}>
                 {systemStatus.status.toUpperCase()}
               </div>
             </div>
           </div>
         )}
 
-        {/* Device Selection */}
-        <div className="mb-6 bg-slate-800/50 backdrop-blur-xs rounded-xl p-6 border border-slate-700">
-          <h2 className="text-xl font-semibold text-white mb-4">Devices</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {devices.map((device) => (
-              <button
-                key={device.deviceId}
-                onClick={() => setSelectedDevice(device.deviceId)}
-                className={`p-4 rounded-lg border-2 transition-all ${
-                  selectedDevice === device.deviceId
+        {/* Device Selection & Sessions */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+          <div className="lg:col-span-2 bg-slate-800/50 backdrop-blur-xs rounded-xl p-6 border border-slate-700">
+            <h2 className="text-xl font-semibold text-white mb-4">Devices</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {devices.map((device: Device) => (
+                <button
+                  key={device.deviceId}
+                  onClick={() => setSelectedDevice(device.deviceId)}
+                  className={`p-4 rounded-lg border-2 transition-all text-left ${selectedDevice === device.deviceId
                     ? 'border-blue-500 bg-blue-500/20'
                     : 'border-slate-600 bg-slate-700/50 hover:border-slate-500'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-semibold text-white">{device.deviceId}</span>
-                  <span className={`w-3 h-3 rounded-full ${getStatusColor(device.online)}`} />
-                </div>
-                <p className="text-sm text-slate-400">
-                  {device.lastUpdate 
-                    ? `Updated: ${new Date(device.lastUpdate).toLocaleTimeString()}`
-                    : 'No data'}
-                </p>
-              </button>
-            ))}
-            {devices.length === 0 && (
-              <p className="text-slate-400 col-span-3 text-center py-4">
-                No devices connected yet
-              </p>
-            )}
+                    }`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-semibold text-white">{device.deviceId}</span>
+                    <span className={`w-3 h-3 rounded-full ${getStatusColor(device.online)}`} />
+                  </div>
+                  <p className="text-sm text-slate-400">
+                    {device.lastUpdate
+                      ? `Updated: ${new Date(device.lastUpdate).toLocaleTimeString()}`
+                      : 'No data'}
+                  </p>
+                </button>
+              ))}
+              {devices.length === 0 && (
+                <p className="text-slate-400 text-center py-4">No devices connected yet</p>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-slate-800/50 backdrop-blur-xs rounded-xl p-6 border border-slate-700">
+            <h2 className="text-xl font-semibold text-white mb-4">Active Sessions</h2>
+            <div className="space-y-3">
+              {Object.entries(sessions).map(([devId, deviceSessions]: [string, any]) => {
+                // deviceSessions is now an object of roles if we changed the backend
+                // or it might still be a single session if it's old data
+                if (deviceSessions.role) {
+                  // Old flat structure
+                  return (
+                    <div key={devId} className="flex items-center p-3 rounded-lg bg-slate-700/30 border border-slate-600">
+                      <div className="mr-3 text-2xl">{getRoleIcon(deviceSessions.role)}</div>
+                      <div className="flex-1">
+                        <div className="text-white font-medium capitalize">{deviceSessions.role}</div>
+                        <div className="text-xs text-slate-400">{devId}</div>
+                      </div>
+                      <div className="text-green-400 text-xs font-bold animate-pulse">LIVE</div>
+                    </div>
+                  );
+                }
+
+                // New nested structure: { patient: {...}, guardian: {...} }
+                return Object.entries(deviceSessions).map(([role, session]: [string, any]) => (
+                  <div key={`${devId}-${role}`} className="flex items-center p-3 rounded-lg bg-slate-700/30 border border-slate-600">
+                    <div className="mr-3 text-2xl">{getRoleIcon(session.role)}</div>
+                    <div className="flex-1">
+                      <div className="text-white font-medium capitalize">{session.role}</div>
+                      <div className="text-xs text-slate-400">{devId}</div>
+                    </div>
+                    <div className="text-green-400 text-xs font-bold animate-pulse">LIVE</div>
+                  </div>
+                ));
+              })}
+              {Object.keys(sessions).length === 0 && (
+                <p className="text-slate-400 text-center py-4 text-sm">No active app logins</p>
+              )}
+            </div>
           </div>
         </div>
 

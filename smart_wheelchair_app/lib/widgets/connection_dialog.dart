@@ -75,7 +75,7 @@ class _ConnectionDialogContentState extends State<_ConnectionDialogContent> {
         final effectiveError = _localError ?? lastError;
 
         return AlertDialog(
-          title: const Text('Connect to Wheelchair'),
+          title: const Text('Connect to SmartNav'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -103,26 +103,25 @@ class _ConnectionDialogContentState extends State<_ConnectionDialogContent> {
             ],
           ),
           actions: [
-            if (widget.allowCancel)
-              TextButton(
-                onPressed: () async {
-                  if (isConnecting || isConnected) {
-                    await provider.disconnect(userInitiated: true);
-                    setState(() {
-                      _localError = null;
-                    });
-                  } else {
-                    Navigator.of(context).pop();
-                  }
-                },
-                child: Text(
-                  isConnecting
-                      ? 'Cancel Attempt'
-                      : isConnected
-                      ? 'Disconnect'
-                      : 'Close',
-                ),
+            TextButton(
+              onPressed: () async {
+                if (isConnecting || isConnected) {
+                  await provider.disconnect(userInitiated: true);
+                  setState(() {
+                    _localError = null;
+                  });
+                } else {
+                  Navigator.of(context).pop();
+                }
+              },
+              child: Text(
+                isConnecting
+                    ? 'Cancel Attempt'
+                    : isConnected
+                    ? 'Disconnect'
+                    : 'Close',
               ),
+            ),
             ElevatedButton(
               onPressed: isConnecting
                   ? null

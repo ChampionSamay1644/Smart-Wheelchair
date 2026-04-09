@@ -1,149 +1,157 @@
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:provider/provider.dart';
+import '../../core/providers/api_provider.dart';
+import 'package:intl/intl.dart';
 
 class MovementLogPage extends StatelessWidget {
   const MovementLogPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Movement Log'),
-          bottom: const TabBar(
-            tabs: [
-              Tab(text: 'Movement History'),
-              Tab(text: 'Map View'),
-            ],
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Movement Log'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: () => context.read<ApiProvider>().fetchHistory(),
           ),
-        ),
-        body: TabBarView(children: [_buildMovementHistory(), _buildMapView()]),
+        ],
+      ),
+      body: Consumer<ApiProvider>(
+        builder: (context, api, _) {
+          final history = List.from(api.sensorHistory);
+          
+          if (history.isEmpty) {
+            return const Center(
+              child: Text('No movement logs found for this device.'),
+            );
+          }
+
+          // Ensure sorting (newest first)
+          history.sort((a, b) {
+            final t1 = a['serverTimestamp'] ?? a['timestamp'] ?? 0;
+            final t2 = b['serverTimestamp'] ?? b['timestamp'] ?? 0;
+            return (t2 as int).compareTo(t1 as int);
+          });
+
+          return ListView.builder(
+            padding: const EdgeInsets.all(8),
+            itemCount: history.length,
+            itemBuilder: (context, index) {
+              final entry = history[index];
+              final motorStatus = entry['motorStatus'];
+              if (motorStatus == null) return const SizedBox.shrink();
+
+              final command = motorStatus['lastCommand'] ?? 'S';
+              final mode = motorStatus['mode'] ?? 'REMOTE';
+              final timestamp = entry['serverTimestamp'] ?? entry['timestamp'] ?? 0;
+              final time = DateTime.fromMillisecondsSinceEpoch(timestamp);
+
+              return Card(
+                margin: const EdgeInsets.symmetric(vertical: 4),
+                child: ListTile(
+                  leading: _buildMovementIcon(command, mode),
+                  title: Text(_getMovementDescription(command, mode)),
+                  subtitle: Text(DateFormat('HH:mm:ss').format(time)),
+                  trailing: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _getModeColor(mode).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      _getModeLabel(mode),
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: _getModeColor(mode)),
+                    ),
+                  ),
+                ),
+              );
+            },
+          );
+        },
       ),
     );
   }
 
-  Widget _buildMovementHistory() {
-    final movements = [
-      _Movement(
-        time: DateTime.now().subtract(const Duration(minutes: 30)),
-        type: MovementType.forward,
-        duration: const Duration(seconds: 45),
-        distance: 15.0,
-      ),
-      _Movement(
-        time: DateTime.now().subtract(const Duration(hours: 1)),
-        type: MovementType.turn,
-        duration: const Duration(seconds: 10),
-        angle: 90.0,
-      ),
-      _Movement(
-        time: DateTime.now().subtract(const Duration(hours: 2)),
-        type: MovementType.backward,
-        duration: const Duration(seconds: 20),
-        distance: 5.0,
-      ),
-      // Add more movements as needed
-    ];
-
-    return ListView.builder(
-      padding: const EdgeInsets.all(8),
-      itemCount: movements.length,
-      itemBuilder: (context, index) {
-        final movement = movements[index];
-        return Card(
-          margin: const EdgeInsets.symmetric(vertical: 4),
-          child: ListTile(
-            leading: _buildMovementIcon(movement.type),
-            title: Text(_getMovementDescription(movement)),
-            subtitle: Text(_formatTime(movement.time)),
-            trailing: Text(_formatDuration(movement.duration)),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildMapView() {
-    // Example coordinates for demonstration
-    const center = LatLng(51.509364, -0.128928);
-
-    return FlutterMap(
-      options: const MapOptions(initialCenter: center, initialZoom: 15.0),
-      children: [
-        TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'com.example.smart_wheelchair_app',
-        ),
-        // Example markers and polylines could be added here
-      ],
-    );
-  }
-
-  Widget _buildMovementIcon(MovementType type) {
+  Widget _buildMovementIcon(String command, String mode) {
     IconData icon;
     Color color;
 
-    switch (type) {
-      case MovementType.forward:
+    switch (command.toUpperCase()) {
+      case 'F':
+      case 'FORWARD':
         icon = FontAwesomeIcons.arrowUp;
         color = Colors.green;
-      case MovementType.backward:
+      case 'B':
+      case 'BACKWARD':
         icon = FontAwesomeIcons.arrowDown;
         color = Colors.orange;
-      case MovementType.turn:
-        icon = FontAwesomeIcons.arrowRotateRight;
+      case 'L':
+      case 'LEFT':
+        icon = FontAwesomeIcons.arrowLeft;
         color = Colors.blue;
+      case 'R':
+      case 'RIGHT':
+        icon = FontAwesomeIcons.arrowRight;
+        color = Colors.blue;
+      case 'S':
+      case 'STOP':
+      default:
+        icon = FontAwesomeIcons.circleStop;
+        color = Colors.red;
+    }
+
+    if (mode.toUpperCase() == 'VOICE') {
+      color = Colors.purple;
     }
 
     return CircleAvatar(
-      backgroundColor: color.withAlpha(51), // 0.2 * 255 ≈ 51
+      backgroundColor: color.withValues(alpha: 0.2),
       child: FaIcon(icon, color: color, size: 16),
     );
   }
 
-  String _getMovementDescription(_Movement movement) {
-    switch (movement.type) {
-      case MovementType.forward:
-        return 'Moved forward ${movement.distance?.toStringAsFixed(1)} meters';
-      case MovementType.backward:
-        return 'Moved backward ${movement.distance?.toStringAsFixed(1)} meters';
-      case MovementType.turn:
-        return 'Turned $movement.angle degrees';
+  Color _getModeColor(String mode) {
+    switch (mode.toUpperCase()) {
+      case 'VOICE': return Colors.purple;
+      case 'JOYSTICK': return Colors.blue;
+      case 'MANUAL': return Colors.green;
+      default: return Colors.grey;
     }
   }
 
-  String _formatTime(DateTime time) {
-    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-  }
-
-  String _formatDuration(Duration duration) {
-    final seconds = duration.inSeconds;
-    if (seconds < 60) {
-      return '$seconds sec';
+  String _getModeLabel(String mode) {
+    switch (mode.toUpperCase()) {
+      case 'VOICE': return '🎙 Voice';
+      case 'JOYSTICK': return '🕹 Joystick';
+      case 'MANUAL': return '🖐 Manual';
+      default: return mode;
     }
-    final minutes = duration.inMinutes;
-    final remainingSeconds = seconds - (minutes * 60);
-    return '$minutes min $remainingSeconds sec';
   }
-}
 
-enum MovementType { forward, backward, turn }
-
-class _Movement {
-  final DateTime time;
-  final MovementType type;
-  final Duration duration;
-  final double? distance;
-  final double? angle;
-
-  _Movement({
-    required this.time,
-    required this.type,
-    required this.duration,
-    this.distance,
-    this.angle,
-  });
+  String _getMovementDescription(String command, String mode) {
+    String action;
+    switch (command.toUpperCase()) {
+      case 'F':
+      case 'FORWARD':
+        action = 'Moving Forward';
+      case 'B':
+      case 'BACKWARD':
+        action = 'Reversing';
+      case 'L':
+      case 'LEFT':
+        action = 'Turning Left';
+      case 'R':
+      case 'RIGHT':
+        action = 'Turning Right';
+      case 'S':
+      case 'STOP':
+        action = 'Stopped';
+      default:
+        action = 'Unknown Command';
+    }
+    return action;
+  }
 }

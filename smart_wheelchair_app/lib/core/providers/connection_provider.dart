@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../services/wheelchair_websocket_service.dart';
+import '../../services/api_service.dart';
 
 class ConnectionProvider extends ChangeNotifier {
   ConnectionProvider() {
@@ -38,7 +39,7 @@ class ConnectionProvider extends ChangeNotifier {
     _initialized = true;
     notifyListeners();
 
-    if (_ipAddress.isNotEmpty) {
+    if (_ipAddress.isNotEmpty && !ApiService().useMockData) {
       await connect(ip: _ipAddress, port: _port, autoAttempt: true);
     }
   }
@@ -48,6 +49,11 @@ class ConnectionProvider extends ChangeNotifier {
     required int port,
     bool autoAttempt = false,
   }) async {
+    if (ApiService().useMockData) {
+      _lastError = 'Hardware connection disabled in Mock Mode';
+      notifyListeners();
+      return false;
+    }
     final trimmedIp = ip.trim();
     if (trimmedIp.isEmpty) {
       _lastError = 'Enter a valid IP address';
@@ -92,6 +98,10 @@ class ConnectionProvider extends ChangeNotifier {
       _lastError = null;
     }
     notifyListeners();
+  }
+
+  void sendMessage(Map<String, dynamic> message) {
+    _wsService.sendMessage(message);
   }
 
   void _subscribeToMessages() {

@@ -6,12 +6,16 @@ import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../services/bluetooth_service.dart';
+import '../../services/api_service.dart';
+import 'api_provider.dart';
 
 class BluetoothProvider extends ChangeNotifier {
-  BluetoothProvider() {
+  BluetoothProvider(this._apiProvider) {
     _init();
   }
 
+  final ApiProvider _apiProvider;
+  final ApiService _apiService = ApiService();
   final WheelchairBluetoothService _service = WheelchairBluetoothService();
   StreamSubscription<Map<String, dynamic>>? _telemetrySubscription;
   StreamSubscription<BluetoothState>? _adapterSubscription;
@@ -35,7 +39,29 @@ class BluetoothProvider extends ChangeNotifier {
   String? get lastError => _lastError;
   DateTime? get lastUpdate => _lastUpdate;
 
+  void _broadcastCommand(Map<String, dynamic> commandData) {
+    if (_apiProvider.selectedDeviceId != null) {
+      final payload = {
+        'deviceId': _apiProvider.selectedDeviceId,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+        'motorStatus': commandData,
+      };
+      
+      _apiService.uploadData(payload).then((_) {
+        debugPrint('☁️ Command Sync: Uploaded ${commandData['lastCommand']} to cloud');
+      }).catchError((Object e) {
+        debugPrint('Cloud command upload failed: $e');
+      });
+    }
+  }
+
   Future<void> _init() async {
+    if (kIsWeb) {
+      _lastError = 'Bluetooth is only available on mobile devices.';
+      _adapterState = BluetoothState.UNKNOWN;
+      notifyListeners();
+      return;
+    }
     _adapterState = await _service.getState();
     _prefs = await SharedPreferences.getInstance();
     try {
@@ -112,6 +138,10 @@ class BluetoothProvider extends ChangeNotifier {
 
   Future<void> sendManualCommand(String command) async {
     await _service.sendManualCommand(command);
+    _broadcastCommand({
+      'lastCommand': command,
+      'mode': 'manual',
+    });
   }
 
   Future<void> sendJoystickUpdate(
@@ -126,6 +156,21 @@ class BluetoothProvider extends ChangeNotifier {
       magnitude: magnitude,
       forceStop: forceStop,
     );
+
+    // Only sync to cloud if it's a significant change or stop
+    // (Actual debouncing is handled in WheelchairBluetoothService, but we'll sync the result here)
+    if (forceStop) {
+      _broadcastCommand({'lastCommand': 'stop', 'mode': 'joystick'});
+    } else {
+      // We can look at the service's classification if we expose it, or just sync periodically
+      // For now, let's sync the raw intent
+      _broadcastCommand({
+        'lastCommand': 'moving', 
+        'mode': 'joystick',
+        'x': x,
+        'y': y
+      });
+    }
   }
 
   void _handleTelemetry(Map<String, dynamic> message) {

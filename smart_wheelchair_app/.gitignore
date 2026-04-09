@@ -43,3 +43,11 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Data sensitive
+android/app/google-services.json
+*.keystore
+*.jks
+
+# Temporary build files
+windows/flutter/ephemeral/
