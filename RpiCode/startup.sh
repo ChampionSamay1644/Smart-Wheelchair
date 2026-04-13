@@ -18,6 +18,23 @@
 set -e
 
 # ─────────────────────────────────────────────
+# Parse Arguments
+# ─────────────────────────────────────────────
+DEVICE_ID="123"
+API_URL="https://wheelchair-api.vercel.app"
+API_PASSWORD="123"
+
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --device-id) DEVICE_ID="$2"; shift ;;
+        --url) API_URL="$2"; shift ;;
+        --password) API_PASSWORD="$2"; shift ;;
+        *) echo "Unknown parameter passed: $1" ;;
+    esac
+    shift
+done
+
+# ─────────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────────
 CODE_DIR="$HOME/Code"
@@ -26,11 +43,13 @@ VENV2_ACTIVATE="$CODE_DIR/venv2/bin/activate"
 
 WEBSOCKET_SCRIPT="$CODE_DIR/rpi_websocket_server.py"
 CAMERA_SCRIPT="$CODE_DIR/rpi_stream_detect_ws.py"
+SENSOR_SERVER_SCRIPT="$CODE_DIR/sensor_server_enhanced.py"
 
 LOG_DIR="$CODE_DIR/logs"
 WEBSOCKET_LOG="$LOG_DIR/websocket.log"
 CAMERA_LOG="$LOG_DIR/camera.log"
 BT_LOG="$LOG_DIR/bluetooth_watchdog.log"
+SENSOR_SERVER_LOG="$LOG_DIR/sensor_server.log"
 
 BT_REFRESH_INTERVAL=30   # seconds between bluetooth keep-alive checks
 BT_DEVICE_NAME="SmartWheelchair"
@@ -41,7 +60,7 @@ CAMERA_PORT="8765"
 STREAM_NAME="front_camera"
 STREAM_WIDTH="640"
 STREAM_HEIGHT="480"
-STREAM_FPS="60"
+STREAM_FPS="10"
 
 # Set to "true"/"false" to enable/disable camera stream at startup
 ENABLE_CAMERA="true"
@@ -67,12 +86,14 @@ info() { echo -e "${BLUE}[$(date '+%H:%M:%S')] ℹ  $*${NC}"; }
 BT_WATCHDOG_PID=""
 WEBSOCKET_PID=""
 CAMERA_PID=""
+SENSOR_SERVER_PID=""
 
 cleanup() {
     echo ""
     warn "Shutting down Smart Wheelchair services..."
 
     [ -n "$CAMERA_PID" ]     && kill "$CAMERA_PID"     2>/dev/null && info "Camera stream stopped."
+    [ -n "$SENSOR_SERVER_PID" ] && kill "$SENSOR_SERVER_PID" 2>/dev/null && info "Sensor server stopped."
     [ -n "$BT_WATCHDOG_PID" ] && kill "$BT_WATCHDOG_PID" 2>/dev/null && info "Bluetooth watchdog stopped."
     [ -n "$WEBSOCKET_PID" ]  && kill "$WEBSOCKET_PID"  2>/dev/null && info "WebSocket server stopped."
 
@@ -186,6 +207,24 @@ if ! kill -0 "$WEBSOCKET_PID" 2>/dev/null; then
 fi
 
 # ─────────────────────────────────────────────
+# 5.5 Start Sensor Server (Web Dashboard + Firebase Upload)
+# ─────────────────────────────────────────────
+info "Starting Sensor Server..."
+info "  Script  : $SENSOR_SERVER_SCRIPT"
+info "  Log     : $SENSOR_SERVER_LOG"
+info "  Device  : $DEVICE_ID to $API_URL"
+
+sudo "$VENV_PYTHON" "$SENSOR_SERVER_SCRIPT" \
+    --device-id "$DEVICE_ID" \
+    --url "$API_URL" \
+    --password "$API_PASSWORD" \
+    >> "$SENSOR_SERVER_LOG" 2>&1 &
+SENSOR_SERVER_PID=$!
+log "Sensor server started (PID $SENSOR_SERVER_PID)"
+sleep 3
+
+
+# ─────────────────────────────────────────────
 # 6. (Optional) Camera stream
 # ─────────────────────────────────────────────
 if [ "$ENABLE_CAMERA" = "true" ]; then
@@ -233,11 +272,13 @@ log "All services are running:"
 echo ""
 info "  Bluetooth watchdog  PID: $BT_WATCHDOG_PID"
 info "  WebSocket server    PID: $WEBSOCKET_PID"
+info "  Sensor server       PID: $SENSOR_SERVER_PID"
 [ -n "$CAMERA_PID" ] && info "  Camera stream       PID: $CAMERA_PID"
 echo ""
 info "Logs:"
 info "  Bluetooth : $BT_LOG"
 info "  WebSocket : $WEBSOCKET_LOG"
+info "  Sensor    : $SENSOR_SERVER_LOG"
 [ -n "$CAMERA_PID" ] && info "  Camera    : $CAMERA_LOG"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
@@ -254,6 +295,19 @@ while true; do
         sudo "$VENV_PYTHON" "$WEBSOCKET_SCRIPT" >> "$WEBSOCKET_LOG" 2>&1 &
         WEBSOCKET_PID=$!
         log "WebSocket server restarted (PID $WEBSOCKET_PID)"
+    fi
+
+    # If Sensor server dies, restart it
+    if ! kill -0 "$SENSOR_SERVER_PID" 2>/dev/null; then
+        warn "Sensor server crashed! Restarting..."
+        sleep 2
+        sudo "$VENV_PYTHON" "$SENSOR_SERVER_SCRIPT" \
+            --device-id "$DEVICE_ID" \
+            --url "$API_URL" \
+            --password "$API_PASSWORD" \
+            >> "$SENSOR_SERVER_LOG" 2>&1 &
+        SENSOR_SERVER_PID=$!
+        log "Sensor server restarted (PID $SENSOR_SERVER_PID)"
     fi
 
     # If camera crashes, log it but don't restart automatically

@@ -13,6 +13,9 @@ import json
 import signal
 import sys
 import time
+import argparse
+import threading
+import requests
 from pathlib import Path
 
 from flask import Flask, Response, jsonify
@@ -44,9 +47,7 @@ HTML_TEMPLATE = """<!doctype html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Smart Wheelchair Sensor Dashboard</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Offline Mode: External CDNs removed -->
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     
@@ -316,15 +317,12 @@ HTML_TEMPLATE = """<!doctype html>
   </div>
   
   <script>
-    let envChart, healthChart, map, gpsMarker;
+    let envChart = null, healthChart = null, map = null, gpsMarker = null;
     const MAX_POINTS = 60;
     
-    // Initialize map
-    map = L.map('map').setView([20.5937, 78.9629], 5);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '© OpenStreetMap contributors'
-    }).addTo(map);
+    // Initialize map (Offline Mode - Disabled)
+    // map = L.map('map').setView([20.5937, 78.9629], 5);
+    // L.tileLayer('...');
     
     // Initialize charts
     function initCharts() {
@@ -385,7 +383,7 @@ HTML_TEMPLATE = """<!doctype html>
     }
     
     function updateCharts(label, data) {
-      [envChart, healthChart].forEach(chart => {
+      if (!envChart || !healthChart) return; // Offline Mode
         chart.data.labels.push(label);
         if (chart.data.labels.length > MAX_POINTS) {
           chart.data.labels.shift();
@@ -429,8 +427,22 @@ HTML_TEMPLATE = """<!doctype html>
         const red = health.red_value || 0;
         const bpm = health.heart_rate_bpm;
         
+        let spo2Display = '--';
+        if (ir > 0 && red > 0) {
+          // Empirical formula: SpO2 = 110 - 25 * R
+          // where we approximate R as roughly RED/IR for the static readings
+          const R = red / ir;
+          let calculatedSpO2 = 110 - (25 * R);
+          
+          // Clamp to valid range
+          if (calculatedSpO2 > 100) calculatedSpO2 = 100;
+          if (calculatedSpO2 < 0) calculatedSpO2 = 0;
+          
+          spo2Display = `${Math.round(calculatedSpO2)}%`;
+        }
+        
         document.getElementById('heartRate').textContent = (bpm != null) ? `${Math.round(bpm)} bpm` : '--';
-        document.getElementById('spo2').innerHTML = `IR: ${ir}<br><span style="font-size:0.6em">RED: ${red}</span>`;
+        document.getElementById('spo2').innerHTML = `${spo2Display}<br><span style="font-size:0.6em; opacity:0.7;">IR: ${ir} | RED: ${red}</span>`;
         
         // Ultrasonic
         updateDistance('front', ultrasonic.front_cm);
@@ -442,7 +454,7 @@ HTML_TEMPLATE = """<!doctype html>
         document.getElementById('longitude').textContent = (gps.longitude != null) ? gps.longitude.toFixed(6) : '--';
         document.getElementById('numSats').textContent = (gps.num_sats != null) ? gps.num_sats : '--';
         
-        if (gps.latitude != null && gps.longitude != null) {
+        if (gps.latitude != null && gps.longitude != null && map) {
           const pos = [gps.latitude, gps.longitude];
           map.setView(pos, Math.max(map.getZoom(), 15));
           if (gpsMarker) gpsMarker.setLatLng(pos);
@@ -504,13 +516,63 @@ def _init_monitoring() -> None:
     atexit.register(stop_monitoring)
 
 
-def run_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
+def firebase_uploader(args):
+    session = requests.Session()
+    session.headers.update({
+        'Content-Type': 'application/json',
+        'X-Device-Id': args.device_id,
+        'X-Device-Password': args.password
+    })
+    upload_endpoint = f"{args.url.rstrip('/')}/api/sensors/upload"
+
+    while True:
+        try:
+            time.sleep(1.0)
+            dht = get_latest_dht() or {}
+            health = get_latest_health() or {}
+            
+            payload = {
+                "deviceId": args.device_id,
+                "timestamp": int(time.time() * 1000),
+                "dht11": {
+                    "temperature": round(dht.get('temperature_c') or 0.0, 1),
+                    "humidity": round(dht.get('humidity_percent') or 0.0, 1)
+                },
+                "max30100": {
+                    "ir": int(health.get('ir_value') or 0),
+                    "red": int(health.get('red_value') or 0)
+                }
+            }
+            
+            response = session.post(upload_endpoint, json=payload, timeout=5)
+            if response.status_code == 503:
+                result = response.json()
+                if result.get('killswitch'):
+                    print("⚠️ KILLSWITCH ENABLED - Uploads blocked by API")
+            elif response.status_code != 200:
+                print(f"⚠️ Firebase upload failed: HTTP {response.status_code}")
+            
+        except Exception as e:
+            print(f"Firebase upload error: {e}")
+
+def run_server(args, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     """Start sensor monitoring and run the Flask development server."""
     _init_monitoring()
     _register_signal_handlers()
+    
+    # Start firebase background uploader thread
+    fb_thread = threading.Thread(target=firebase_uploader, args=(args,), daemon=True)
+    fb_thread.start()
+    
     print(f"🚀 Sensor Dashboard running at http://{host}:{port}")
     app.run(host=host, port=port, threaded=True)
 
 
 if __name__ == "__main__":
-    run_server()
+    parser = argparse.ArgumentParser(description='Enhanced Sensor Server')
+    parser.add_argument('--device-id', default='TEST_001', help='Device identifier')
+    parser.add_argument('--url', default='https://wheelchair-api.vercel.app', help='API base URL')
+    parser.add_argument('--password', default='pat_123', help='Device password')
+    parsed_args = parser.parse_args()
+    
+    run_server(parsed_args)
